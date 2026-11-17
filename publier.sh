@@ -27,8 +27,6 @@ if ! git diff --cached --quiet; then
     git commit -q -m "StudentCode $VERSION"
     echo "==> Commit créé ($(git log -1 --format=%h))"
 fi
-ARCHIVE="$(./scripts/make-release.sh)"
-echo "==> Archive de la version : $ARCHIVE"
 
 if ! command -v gh >/dev/null || ! gh auth status >/dev/null 2>&1; then
     cat <<EOF
@@ -83,10 +81,8 @@ else
     git tag "$TAG"
 fi
 git push origin "$TAG"
-if gh release view "$TAG" >/dev/null 2>&1; then
-    gh release upload "$TAG" "$ARCHIVE" --clobber
-else
-    gh release create "$TAG" "$ARCHIVE" --title "StudentCode $TAG" --notes-file CHANGELOG.md
-fi
+URL="$(gh repo view --json url -q .url)"
 echo
-echo "Publié : $(gh repo view --json url -q .url)/releases/tag/$TAG"
+echo "==> L'étiquette $TAG est envoyée : GitHub fabrique maintenant les versions Windows et Linux"
+echo "    (environ 10 minutes), puis les publie sur $URL/releases/tag/$TAG"
+echo "    Suivre la fabrication :  gh run watch -R ${URL#https://github.com/}"

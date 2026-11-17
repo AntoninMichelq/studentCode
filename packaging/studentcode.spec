@@ -34,6 +34,7 @@ a = Analysis(
     excludes=["gi", "PIL", "yaml", "tkinter", "PyQt5", "PySide6", "PySide2", "matplotlib", "numpy", "IPython",
               "PyQt6.QtQuick3D", "PyQt6.QtMultimedia", "PyQt6.QtBluetooth", "PyQt6.QtSensors",
               "PyQt6.QtDesigner", "PyQt6.QtCharts", "PyQt6.QtDataVisualization", "PyQt6.Qt3DCore"],
+    runtime_hooks=[os.path.join(SPECPATH, "rth_selftest.py")],
     noarchive=False,
 )
 # Qt est livré entier ; on retire ce que StudentCode n'utilise pas (Qt Quick 3D, contrôles QML,
@@ -64,6 +65,7 @@ exe = EXE(
     name="StudentCode",
     icon=os.path.join(SPECPATH, "icon.ico"),
     console=False,          # pas de fenêtre noire derrière l'app sous Windows
+    disable_windowed_traceback=True,   # erreur au démarrage : pas de boîte bloquante (voir rth_selftest)
     upx=False,
     version=os.path.join(SPECPATH, "version_info.txt") if WINDOWS and os.path.isfile(
         os.path.join(SPECPATH, "version_info.txt")) else None,

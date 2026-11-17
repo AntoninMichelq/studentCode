@@ -30,6 +30,7 @@ jobs:
 
   linux:
     needs: check
+    timeout-minutes: 40
     runs-on: ubuntu-22.04   # glibc ancienne : l'app marche aussi sur les distributions plus récentes
     env:
       VERSION: ${{ needs.check.outputs.version }}
@@ -52,8 +53,16 @@ jobs:
           QT_QPA_PLATFORM: offscreen
           STUDENTCODE_SELFTEST_OUT: ${{ runner.temp }}/selftest.txt
         run: |
-          dist/StudentCode/StudentCode --selftest || { cat "$STUDENTCODE_SELFTEST_OUT"; exit 1; }
-          cat "$STUDENTCODE_SELFTEST_OUT"
+          set +e
+          timeout 300 dist/StudentCode/StudentCode --selftest > /dev/null 2>&1
+          code=$?
+          cat "$STUDENTCODE_SELFTEST_OUT" || echo "(aucun résultat écrit)"
+          # résultat visible dans le résumé du lancement (gh run view), sans ouvrir les journaux
+          if [ $code -ne 0 ]; then
+            echo "::error title=Autotest Linux (code $code)::$(tr '\n' '|' < "$STUDENTCODE_SELFTEST_OUT" 2>/dev/null | cut -c1-900)"
+            exit 1
+          fi
+          grep '^ATTENTION' "$STUDENTCODE_SELFTEST_OUT" | while read -r l; do echo "::warning title=Autotest Linux::$l"; done
       - name: Archives
         run: |
           NAME="StudentCode-$VERSION-linux-x86_64"
@@ -70,6 +79,7 @@ jobs:
 
   windows:
     needs: check
+    timeout-minutes: 40
     runs-on: windows-latest
     env:
       VERSION: ${{ needs.check.outputs.version }}
@@ -86,10 +96,21 @@ jobs:
         shell: pwsh
         run: |
           $env:QT_QPA_PLATFORM = "offscreen"
-          $env:STUDENTCODE_SELFTEST_OUT = "$env:RUNNER_TEMP\selftest.txt"
-          $p = Start-Process -FilePath "dist\StudentCode\StudentCode.exe" -ArgumentList "--selftest" -Wait -PassThru
-          if (Test-Path $env:STUDENTCODE_SELFTEST_OUT) { Get-Content $env:STUDENTCODE_SELFTEST_OUT }
-          if ($p.ExitCode -ne 0) { throw "autotest en échec ($($p.ExitCode))" }
+          $out = "$env:RUNNER_TEMP\selftest.txt"
+          $env:STUDENTCODE_SELFTEST_OUT = $out
+          $p = Start-Process -FilePath "dist\StudentCode\StudentCode.exe" -ArgumentList "--selftest" -PassThru
+          $null = $p.Handle   # sans cette ligne, PowerShell perd parfois le code de sortie
+          if (-not $p.WaitForExit(300000)) { $p.Kill(); $code = "délai dépassé" } else { $code = $p.ExitCode }
+          $text = if (Test-Path $out) { Get-Content $out -Raw } else { "(aucun résultat écrit : l'app s'est arrêtée avant l'autotest)" }
+          Write-Output $text
+          # résultat visible dans le résumé du lancement (gh run view), sans ouvrir les journaux
+          $short = ($text -replace "`r?`n", " | ")
+          if ($short.Length -gt 900) { $short = $short.Substring($short.Length - 900) }
+          if ("$code" -ne "0") {
+            Write-Output "::error title=Autotest Windows (code $code)::$short"
+            exit 1
+          }
+          foreach ($l in ($text -split "`r?`n")) { if ($l -like "ATTENTION*") { Write-Output "::warning title=Autotest Windows::$l" } }
       - name: Version portable (zip)
         shell: pwsh
         run: |
@@ -109,7 +130,8 @@ jobs:
           path: out/*
 
   publish:
-    if: github.ref_type == 'tag'
+    # publie ce qui a réussi, même si l'un des deux systèmes a échoué
+    if: always() && github.ref_type == 'tag' && needs.check.result == 'success' && (needs.linux.result == 'success' || needs.windows.result == 'success')
     needs: [check, linux, windows]
     runs-on: ubuntu-latest
     steps:

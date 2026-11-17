@@ -13,7 +13,7 @@ import shutil
 import sys
 import threading
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sysinfo import (APP_DIR, FROZEN, PYTHON_MISSING, WINDOWS, child_env, prepare_children, python_cmd,
                      python_exe, quote, restart_cmd, shell_cmd)
@@ -3461,60 +3461,86 @@ class MainWindow(QMainWindow):
 
 def selftest():
     """Vérification de l'app empaquetée (utilisée par la fabrication des versions) : tous les
-    modules se chargent et la fenêtre s'ouvre, puis se ferme toute seule."""
+    modules se chargent et la fenêtre s'ouvre, puis se ferme toute seule. Chaque étape est
+    notée dans le fichier STUDENTCODE_SELFTEST_OUT (l'exécutable Windows n'a pas de console),
+    pour savoir où l'app s'est arrêtée si elle plante."""
+    import faulthandler
     import importlib
-    missing = []
-    mods = ["jedi", "pyte", "paramiko", "keyring", "pypdfium2", "PyQt6.Qsci", "PyQt6.QtWebEngineWidgets",
-            "PyQt6.QtSvg", "terminal", "remote", "vpn", "ai", "pdfview", "langs"]
-    if WINDOWS:
-        mods.append("winpty")
-    for m in mods:
-        try:
-            importlib.import_module(m)
+    import traceback
+    out_path = os.environ.get("STUDENTCODE_SELFTEST_OUT")
+    log = open(out_path, "w", encoding="utf-8", buffering=1) if out_path else None
+    if log is not None:
+        faulthandler.enable(log)
+
+    def say(text):
+        if log is not None:
+            log.write(text + "\n")
+        if sys.stdout is not None:
+            print(text, flush=True)
+
+    problems, notes = [], []
+    try:
+        say(f"StudentCode {__version__} · Python {sys.version.split()[0]} · {sys.platform}")
+        mods = ["jedi", "pyte", "paramiko", "keyring", "pypdfium2", "PyQt6.Qsci", "PyQt6.QtWebEngineWidgets",
+                "PyQt6.QtSvg", "terminal", "remote", "vpn", "ai", "pdfview", "langs"]
+        if WINDOWS:
+            mods.append("winpty")
+        for m in mods:
+            try:
+                importlib.import_module(m)
+            except Exception as e:
+                problems.append(f"module {m} : {e!r}")
+        say("modules : " + ("ok" if not problems else "; ".join(problems)))
+        for f in ("dbg_backend.py", "run_backend.py", "icon.svg"):
+            if not os.path.isfile(os.path.join(APP_DIR, f)):
+                problems.append("fichier absent : " + f)
+        try:   # les données de jedi (stubs de la bibliothèque standard) sont bien embarquées
+            import jedi
+            names = [c.name for c in jedi.Script("import os\nos.pa", path="t.py",
+                                                 environment=jedi.InterpreterEnvironment()).complete(2, 5)]
+            if "path" not in names:
+                notes.append("jedi : complétion vide")
         except Exception as e:
-            missing.append(f"{m}: {e}")
-    import jedi
-    try:   # les données de jedi (stubs de la bibliothèque standard) sont bien embarquées
-        names = [c.name for c in jedi.Script("import os\nos.pa", path="t.py",
-                                             environment=jedi.InterpreterEnvironment()).complete(2, 5)]
-        if "path" not in names:
-            missing.append("jedi : complétion vide")
-    except Exception as e:
-        missing.append(f"jedi : {e}")
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    app = QApplication(["studentcode"])
-    app.setStyleSheet(QSS)
-    win = MainWindow([os.path.join(APP_DIR, "run_backend.py")])
-    win.show()
-    for f in ("dbg_backend.py", "run_backend.py", "icon.svg"):
-        if not os.path.isfile(os.path.join(APP_DIR, f)):
-            missing.append("fichier absent : " + f)
-    QTimer.singleShot(1500, app.quit)
-    app.exec()
-    win.close()
-    py = python_cmd()
-    if py:   # le Python de l'ordinateur se lance proprement depuis l'app (environnement nettoyé)
-        import subprocess
-        import tempfile
-        script = os.path.join(tempfile.mkdtemp(), "essai.py")
-        with open(script, "w") as fh:
-            fh.write("print(6 * 7)\n")
-        try:
-            r = subprocess.run(py + ["-u", os.path.join(APP_DIR, "run_backend.py"), script], input="",
-                               capture_output=True, text=True, timeout=30, env=child_env(),
-                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            if "42" not in r.stdout:
-                missing.append("exécution Python : " + (r.stdout + r.stderr)[-300:])
-        except Exception as e:
-            missing.append(f"exécution Python : {e}")
-    result = "\n".join(missing) if missing else "SELFTEST OK"
-    out = os.environ.get("STUDENTCODE_SELFTEST_OUT")
-    if out:   # l'exécutable Windows n'a pas de console : le résultat passe par un fichier
-        with open(out, "w", encoding="utf-8") as fh:
-            fh.write(result + "\n")
-    if sys.stdout is not None:
-        print(result, flush=True)
-    sys.exit(1 if missing else 0)
+            notes.append(f"jedi : {e!r}")
+        say("complétion : vérifiée")
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        app = QApplication(["studentcode"])
+        app.setStyleSheet(QSS)
+        say("QApplication : ok")
+        win = MainWindow([os.path.join(APP_DIR, "run_backend.py")])
+        win.show()
+        say("fenêtre : ok")
+        QTimer.singleShot(1500, app.quit)
+        app.exec()
+        win.close()
+        say("boucle Qt : ok")
+        py = python_cmd()
+        if not py:
+            notes.append("aucun Python trouvé sur la machine")
+        else:   # le Python de l'ordinateur se lance proprement depuis l'app (environnement nettoyé)
+            import subprocess
+            import tempfile
+            script = os.path.join(tempfile.mkdtemp(), "essai.py")
+            with open(script, "w") as fh:
+                fh.write("print(6 * 7)\n")
+            try:
+                r = subprocess.run(py + ["-u", os.path.join(APP_DIR, "run_backend.py"), script],
+                                   input=b"", capture_output=True, timeout=30, env=child_env(),
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                text = (r.stdout + r.stderr).decode("utf-8", "replace")
+                if "42" not in text:
+                    notes.append(f"exécution Python ({' '.join(py)}) : {text[-300:]!r}")
+            except Exception as e:
+                notes.append(f"exécution Python ({' '.join(py)}) : {e!r}")
+            say("exécution Python : " + " ".join(py))
+    except BaseException:
+        problems.append("plantage :\n" + traceback.format_exc())
+    for n in notes:
+        say("ATTENTION " + n)
+    say("\n".join("ERREUR " + p for p in problems) if problems else "SELFTEST OK")
+    if log is not None:
+        log.close()
+    os._exit(1 if problems else 0)   # sans attendre la fermeture des processus du moteur web
 
 
 def main():

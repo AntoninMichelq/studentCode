@@ -1,5 +1,11 @@
 # Journal des versions
 
+## 1.1.1
+
+- Fabrication des versions : l'autotest Windows indique précisément ce qui échoue, la version
+  Linux est publiée même si celle de Windows échoue, et `publier.sh` laisse GitHub publier
+  tous les fichiers (installateur Windows, zip, version Linux, sources).
+
 ## 1.1.0
 
 - **Windows** : installateur (`…-windows-x64-setup.exe`, sans droits administrateur) et version
