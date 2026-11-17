@@ -1,0 +1,128 @@
+# Fabrique StudentCode pour Windows et Linux.
+# - étiquette « v1.2.3 » poussée : construit, vérifie, puis publie la version sur GitHub ;
+# - lancement manuel (onglet Actions → Release → Run workflow) : construit et vérifie seulement,
+#   les fichiers sont téléchargeables depuis la page du lancement.
+name: Release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: Lire la version
+        run: |
+          VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' studentcode/main.py)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "Étiquette $GITHUB_REF_NAME ≠ version $VERSION du code"; exit 1
+          fi
+      - name: Vérifier la syntaxe
+        run: python3 -m py_compile studentcode/*.py && bash -n install.sh packaging/install-linux.sh
+
+  linux:
+    needs: check
+    runs-on: ubuntu-22.04   # glibc ancienne : l'app marche aussi sur les distributions plus récentes
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Bibliothèques système
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-cursor0 libxkbcommon-x11-0 libegl1 libnss3 libxcomposite1 \
+            libxdamage1 libxrandr2 libxtst6 libasound2 libxkbfile1
+      - name: Dépendances
+        run: pip install -r packaging/requirements.txt
+      - name: Empaqueter
+        run: pyinstaller --noconfirm packaging/studentcode.spec
+      - name: Autotest de l'app empaquetée
+        env:
+          QT_QPA_PLATFORM: offscreen
+          STUDENTCODE_SELFTEST_OUT: ${{ runner.temp }}/selftest.txt
+        run: |
+          dist/StudentCode/StudentCode --selftest || { cat "$STUDENTCODE_SELFTEST_OUT"; exit 1; }
+          cat "$STUDENTCODE_SELFTEST_OUT"
+      - name: Archives
+        run: |
+          NAME="StudentCode-$VERSION-linux-x86_64"
+          mkdir -p "out/$NAME"
+          mv dist/StudentCode "out/$NAME/StudentCode"
+          cp packaging/install-linux.sh README.md CHANGELOG.md "out/$NAME/"
+          tar -C out -czf "out/$NAME.tar.gz" "$NAME"
+          ./scripts/make-release.sh
+          mv "dist/StudentCode-$VERSION.tar.gz" "out/StudentCode-$VERSION-source.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: out/*.tar.gz
+
+  windows:
+    needs: check
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dépendances
+        run: pip install -r packaging/requirements.txt
+      - name: Empaqueter
+        run: pyinstaller --noconfirm packaging/studentcode.spec
+      - name: Autotest de l'app empaquetée
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $env:STUDENTCODE_SELFTEST_OUT = "$env:RUNNER_TEMP\selftest.txt"
+          $p = Start-Process -FilePath "dist\StudentCode\StudentCode.exe" -ArgumentList "--selftest" -Wait -PassThru
+          if (Test-Path $env:STUDENTCODE_SELFTEST_OUT) { Get-Content $env:STUDENTCODE_SELFTEST_OUT }
+          if ($p.ExitCode -ne 0) { throw "autotest en échec ($($p.ExitCode))" }
+      - name: Version portable (zip)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Compress-Archive -Path dist\StudentCode -DestinationPath "out\StudentCode-$env:VERSION-windows-x64.zip"
+      - name: Installateur
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          & $iscc "/DAppVersion=$env:VERSION" packaging\studentcode.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup en échec" }
+          Move-Item "dist\StudentCode-$env:VERSION-windows-x64-setup.exe" out\
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/*
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: [check, linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publier la version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -lh out
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --title "StudentCode $GITHUB_REF_NAME" --notes-file CHANGELOG.md
+          gh release upload "$GITHUB_REF_NAME" out/* --clobber
