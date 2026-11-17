@@ -13,7 +13,7 @@ import shutil
 import sys
 import threading
 
-__version__ = "1.1.3"
+__version__ = "1.1.4"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sysinfo import (APP_DIR, FROZEN, PYTHON_MISSING, WINDOWS, child_env, prepare_children, python_cmd,
                      python_exe, quote, restart_cmd, shell_cmd)
@@ -88,6 +88,7 @@ from urllib.parse import quote_plus
 from icons import IconProvider, file_icon, icon, pixmap
 from remote import RemoteHub
 from runcmd import posix_command, windows_command
+from semantic import Semantic
 from vpn import VpnPanel
 from terminal import LocalTerminal, make_term
 from ai import AiPanel
@@ -377,6 +378,12 @@ class Editor(QsciScintilla):
         if key:   # C, Java, Gradle, Kotlin, HTML, YAML, SQL… : coloration aux couleurs du thème
             lx = langs.theme_lexer(langs.make_lexer(key, self), self.win.code_font, theme.P)
             self.setLexer(lx)
+            if Semantic.supported(lx):   # types, fonctions et constantes colorés en plus des mots-clés
+                if getattr(self, "semantic", None) is not None:
+                    self.textChanged.disconnect(self.semantic.timer.start)
+                self.semantic = Semantic(self, key, {"prepro": theme.P["RED"], "type": theme.P["YELLOW"],
+                                                     "func": theme.P["BLUE"], "const": theme.P["ORANGE"],
+                                                     "include": theme.P["GREEN"]})
             self.setMarginsBackgroundColor(QColor(BG))
             self.setMarginsForegroundColor(QColor(GUTTER))
             self.setFoldMarginColors(QColor(BG), QColor(BG))

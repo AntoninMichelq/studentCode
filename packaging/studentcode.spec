@@ -15,7 +15,7 @@ datas = [(f, ".") for f in glob.glob(os.path.join(SRC, "*.svg"))]
 datas += [(os.path.join(SRC, f), ".") for f in ("dbg_backend.py", "run_backend.py")]
 datas += collect_data_files("jedi") + collect_data_files("parso")
 binaries = []
-hidden = ["ai", "icons", "langs", "lazy", "pdfview", "remote", "runcmd", "sysinfo", "terminal",
+hidden = ["ai", "icons", "langs", "lazy", "pdfview", "remote", "runcmd", "semantic", "sysinfo", "terminal",
           "theme", "vpn", "pyte", "paramiko", "keyring", "jedi", "parso", "PyQt6.Qsci", "PyQt6.QtSvg",
           "PyQt6.QtWebEngineWidgets", "PyQt6.QtWebEngineCore"]
 hidden += collect_submodules("keyring.backends")

@@ -1,5 +1,11 @@
 # Journal des versions
 
+## 1.1.4
+
+- Coloration plus riche en C, C++, Java, C#, JavaScript… : types (`Model`, `size_t`, `String`)
+  en jaune, fonctions en bleu, constantes en MAJUSCULES (`SIZEMAP`, `NULL`) en orange,
+  `#include` / `#define` en rose et fichiers inclus en vert.
+
 ## 1.1.3
 
 - Ouvrir un dossier (menu, page d'accueil, `studentcode dossier`) place aussi le terminal dans ce
