@@ -13,7 +13,7 @@ import shutil
 import sys
 import threading
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sysinfo import (APP_DIR, FROZEN, PYTHON_MISSING, WINDOWS, child_env, prepare_children, python_cmd,
                      python_exe, quote, restart_cmd, shell_cmd)
@@ -2519,6 +2519,8 @@ class MainWindow(QMainWindow):
         self.root_lbl.setText("  " + (os.path.basename(path) or path).upper())
         self.root_lbl.setToolTip(path)
         self.settings.setValue("root", path)  # retenu tout de suite, pas seulement à la fermeture
+        if hasattr(self, "terminal"):
+            self.terminal.cd(path)   # le terminal suit le dossier ouvert
 
     # ---------------------------------------- explorateur : dossiers dépliés retenus
     def tree_expanded(self, index, on):

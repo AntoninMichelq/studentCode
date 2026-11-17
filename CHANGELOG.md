@@ -1,5 +1,10 @@
 # Journal des versions
 
+## 1.1.3
+
+- Ouvrir un dossier (menu, page d'accueil, `studentcode dossier`) place aussi le terminal dans ce
+  dossier ; la saisie en cours dans le terminal est effacée avant.
+
 ## 1.1.2
 
 - `studentcode .` dans un terminal ouvre StudentCode sur le dossier courant (explorateur et

@@ -653,6 +653,7 @@ class WindowsShell:
         from sysinfo import child_env
         env = dict(child_env(), TERM="xterm-256color", COLORTERM="truecolor")
         env.pop("QT_LOGGING_RULES", None)
+        self.kind = "powershell" if len(args) > 1 else "cmd"
         self.proc = PtyProcess.spawn(args, cwd=cwd, env=env, dimensions=(rows, cols))
         proc = self.proc
 
@@ -765,10 +766,19 @@ class LocalTerminal(QWidget):
             self.shell.resize(cols, rows)
 
     def cd(self, path):
-        """Place le shell dans `path` (quand on change de dossier de projet)."""
-        if self.shell is not None:
-            from sysinfo import quote
-            self.write((" cd " + quote(path) + "\r").encode("utf-8"))
+        """Place le shell dans `path` (quand on change de dossier de projet). La ligne en cours
+        de saisie est effacée d'abord, pour ne pas s'y ajouter."""
+        if self.shell is None:
+            return
+        kind = getattr(self.shell, "kind", "posix")
+        if kind == "powershell":
+            line = "\x1bSet-Location -LiteralPath '" + path.replace("'", "''") + "'\r"
+        elif kind == "cmd":
+            line = 'cd /d "' + path + '"\r'
+        else:
+            import shlex
+            line = "\x15 cd " + shlex.quote(path) + "\r"   # Ctrl+U vide la ligne ; l'espace évite l'historique
+        self.write(line.encode("utf-8"))
 
     def shutdown(self):
         if self.shell is not None:
