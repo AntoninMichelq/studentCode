@@ -1,0 +1,18 @@
+# Bibliothèques installées par défaut dans LazyPy (une par ligne).
+# Ajoute ou enlève des lignes avant de lancer install.sh si tu veux.
+numpy
+pandas
+matplotlib
+scipy
+scikit-learn
+sympy
+seaborn
+networkx
+requests
+beautifulsoup4
+pillow
+pygame-ce
+flask
+pytest
+tqdm
+openpyxl

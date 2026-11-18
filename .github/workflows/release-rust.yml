@@ -1,0 +1,123 @@
+# Fabrique StudentCode en Rust pour Windows et Linux.
+# - étiquette « rust-v2.0.0-alpha.1 » poussée : construit, vérifie, publie (en préversion) ;
+# - lancement manuel (Actions → Release Rust → Run workflow) : construit et vérifie seulement.
+name: Release Rust
+on:
+  push:
+    tags: ["rust-v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+defaults:
+  run:
+    working-directory: rust
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04   # glibc ancienne : le programme marche aussi sur les distributions récentes
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bibliothèques système
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libssl-dev pkg-config
+      - name: Module Lecteur PDF (pdfium)
+        run: |
+          mkdir -p /tmp/pdfium modules/pdf
+          curl -fsSL https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7763/pdfium-linux-x64.tgz | tar xz -C /tmp/pdfium
+          cp /tmp/pdfium/lib/libpdfium.so modules/pdf/
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Tests
+        run: cargo test --release
+      - name: Compilation
+        run: cargo build --release
+      - name: Autotest
+        run: STUDENTCODE_MODULES=modules ./target/release/studentcode --selftest
+      - name: Archive
+        run: |
+          VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          NAME="StudentCode-$VERSION-linux-x86_64"
+          mkdir -p "out/$NAME"
+          cp target/release/studentcode packaging/install.sh "out/$NAME/"
+          cp assets/icon-256.png "out/$NAME/icon.png"
+          cp -r modules "out/$NAME/"
+          echo "$VERSION" > "out/$NAME/VERSION"
+          tar -C out -czf "out/$NAME.tar.gz" "$NAME"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: rust/out/*.tar.gz
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Module Lecteur PDF (pdfium)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\pdfium", modules\pdf | Out-Null
+          Invoke-WebRequest https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7763/pdfium-win-x64.tgz -OutFile "$env:RUNNER_TEMP\pdfium.tgz"
+          tar -xzf "$env:RUNNER_TEMP\pdfium.tgz" -C "$env:RUNNER_TEMP\pdfium"
+          Copy-Item "$env:RUNNER_TEMP\pdfium\bin\pdfium.dll" modules\pdf\
+      - name: Compilation
+        run: cargo build --release
+      - name: Autotest
+        shell: pwsh
+        run: |
+          $env:STUDENTCODE_MODULES = "modules"
+          $p = Start-Process -FilePath "target\release\studentcode.exe" -ArgumentList "--selftest" -NoNewWindow -PassThru `
+               -RedirectStandardOutput "$env:RUNNER_TEMP\st.txt"
+          $null = $p.Handle
+          if (-not $p.WaitForExit(120000)) { $p.Kill(); throw "délai dépassé" }
+          Get-Content "$env:RUNNER_TEMP\st.txt"
+          if ($p.ExitCode -ne 0) { Write-Output "::error title=Autotest Windows::$(Get-Content "$env:RUNNER_TEMP\st.txt" -Raw)"; exit 1 }
+      - name: Version portable et installateur
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          $name = "StudentCode-$version-windows-x64"
+          New-Item -ItemType Directory -Force "out\$name\modules" | Out-Null
+          Copy-Item target\release\studentcode.exe "out\$name\"
+          Copy-Item -Recurse modules\pyscripter "out\$name\modules\"
+          Copy-Item -Recurse modules\pdf "out\$name\modules\"
+          Compress-Archive -Path "out\$name" -DestinationPath "out\$name.zip"
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc "/DAppVersion=$version" packaging\studentcode.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup en échec" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            rust/out/*.zip
+            rust/out/*.exe
+
+  publish:
+    if: always() && github.ref_type == 'tag' && (needs.linux.result == 'success' || needs.windows.result == 'success')
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publier
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -lh out
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --prerelease --title "StudentCode ${GITHUB_REF_NAME#rust-v} (Rust)" \
+                 --notes-file rust/CHANGELOG.md
+          gh release upload "$GITHUB_REF_NAME" out/* --clobber

@@ -1,0 +1,11 @@
+# Bibliothèques embarquées dans l'app empaquetée (Windows et Linux)
+PyQt6>=6.6
+PyQt6-QScintilla>=2.14
+PyQt6-WebEngine>=6.6
+jedi>=0.19
+paramiko>=3.4
+keyring>=24
+pyte>=0.8.2
+pypdfium2>=4.30
+pywinpty>=2.0.13; sys_platform == "win32"
+pyinstaller>=6.10
