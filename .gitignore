@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+dist/
+*.tar.gz
+.venv/
+venv/
+.idea/
+.vscode/
+*.swp
+build/
+rust/target/
