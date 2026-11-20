@@ -452,7 +452,7 @@ impl Terminal {
                 ui.close();
             }
             if ui.button("Coller").clicked() {
-                // le collage passe par l'événement Paste (Ctrl+Maj+V)
+                if let Some(t) = crate::clip::get() { self.paste(&t); }
                 ui.close();
             }
             if ui.button("Effacer l'écran").clicked() {
@@ -469,6 +469,19 @@ impl Terminal {
             self.master = None;
             self.ssh = None;
             self.parser.lock().unwrap().process("\r\n[terminé — Entrée pour relancer]\r\n".as_bytes());
+        }
+    }
+
+    /// Colle du texte (mode « collage encadré » si le programme le demande, comme bash).
+    fn paste(&mut self, t: &str) {
+        self.scroll_to_bottom();
+        let bracketed = self.parser.lock().unwrap().screen().bracketed_paste();
+        if bracketed {
+            self.write(b"\x1b[200~");
+            self.write(t.as_bytes());
+            self.write(b"\x1b[201~");
+        } else {
+            self.write(t.replace("\r\n", "\r").replace('\n', "\r").as_bytes());
         }
     }
 
@@ -489,14 +502,8 @@ impl Terminal {
                     self.write(t.as_bytes());
                 }
                 egui::Event::Paste(t) => {
-                    self.scroll_to_bottom();
-                    if bracketed {
-                        self.write(b"\x1b[200~");
-                        self.write(t.as_bytes());
-                        self.write(b"\x1b[201~");
-                    } else {
-                        self.write(t.replace('\n', "\r").as_bytes());
-                    }
+                    let _ = bracketed;
+                    self.paste(&t);
                 }
                 egui::Event::Copy => {
                     if let Some(t) = self.selection_text() {
@@ -506,6 +513,13 @@ impl Terminal {
                     }
                 }
                 egui::Event::Cut => self.write(b"\x18"),
+                // Ctrl+Maj+C / Ctrl+Maj+V : copier / coller, comme dans les terminaux Linux
+                egui::Event::Key { key: Key::C, pressed: true, modifiers, .. } if modifiers.ctrl && modifiers.shift => {
+                    if let Some(t) = self.selection_text() { ui.ctx().copy_text(t); }
+                }
+                egui::Event::Key { key: Key::V, pressed: true, modifiers, .. } if modifiers.ctrl && modifiers.shift => {
+                    if let Some(t) = crate::clip::get() { self.paste(&t); }
+                }
                 egui::Event::Key { key, pressed: true, modifiers, .. } => {
                     let seq: Option<Vec<u8>> = if modifiers.ctrl && !modifiers.shift {
                         let name = key.name();

@@ -294,6 +294,20 @@ impl App {
         });
         ui.menu_button("Édition", |ui| {
             ui.set_min_width(330.0);
+            use crate::editor::EditCmd;
+            let mut cmd: Option<EditCmd> = None;
+            if icons::menu_action(ui, None, "Annuler", "Ctrl+Z", has_tab).clicked() { cmd = Some(EditCmd::Undo); }
+            if icons::menu_action(ui, None, "Rétablir", "Ctrl+Y", has_tab).clicked() { cmd = Some(EditCmd::Redo); }
+            ui.separator();
+            if icons::menu_action(ui, None, "Couper", "Ctrl+X", has_tab).clicked() { cmd = Some(EditCmd::Cut); }
+            if icons::menu_action(ui, None, "Copier", "Ctrl+C", has_tab).clicked() { cmd = Some(EditCmd::Copy); }
+            if icons::menu_action(ui, None, "Coller", "Ctrl+V", has_tab).clicked() { cmd = crate::clip::get().map(EditCmd::Paste); ui.close(); }
+            if icons::menu_action(ui, None, "Tout sélectionner", "Ctrl+A", has_tab).clicked() { cmd = Some(EditCmd::SelectAll); }
+            if let Some(c) = cmd {
+                if let Some(d) = self.cur_doc() { d.pending_edit = Some(c); }
+                ui.close();
+            }
+            ui.separator();
             if icons::menu_action(ui, Some((Icon::Search, p.cyan)), "Rechercher / Remplacer", &keys["find"], has_tab).clicked() {
                 self.find_open = true;
                 ctx.memory_mut(|m| m.request_focus(egui::Id::new("find")));

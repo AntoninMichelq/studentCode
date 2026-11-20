@@ -35,6 +35,8 @@ pub struct Doc {
     pub pending_comment: bool,
     /// « Dupliquer la ligne » demandé par le raccourci
     pub pending_duplicate: bool,
+    /// Annuler, Copier, Coller… demandé par un menu
+    pub pending_edit: Option<EditCmd>,
     /// recherche vers le haut (bouton ↑ de la barre de recherche)
     pub find_back: bool,
     /// « Remplacer » : remplace l'occurrence sélectionnée par ce texte puis passe à la suivante
@@ -53,7 +55,7 @@ impl Doc {
             path: None, text: String::new(), saved_hash: hash(""), lang: Lang::Plain,
             id: egui::Id::new(("doc", n, std::time::SystemTime::now())), cache: None,
             breakpoints: BTreeSet::new(), goto: None, cursor_line: 1, cursor_col: 1, find: None, find_next: false,
-            remote: None, untitled: n, folded: BTreeSet::new(), folds: None, lines_before: 0, pending_comment: false, pending_duplicate: false, find_back: false, replace_with: None,
+            remote: None, untitled: n, folded: BTreeSet::new(), folds: None, lines_before: 0, pending_comment: false, pending_duplicate: false, pending_edit: None, find_back: false, replace_with: None,
         }
     }
 
@@ -233,6 +235,9 @@ impl Doc {
         let folded_ranges: Vec<(usize, usize)> = folds.iter().filter(|(h, _)| self.folded.contains(h)).copied().collect();
         let hidden = |line: usize| folded_ranges.iter().any(|(h, e)| line > *h && line <= *e);
         let te_id = self.id.with("te");
+        if let Some(cmd) = self.pending_edit.take() {
+            self.apply_edit(ui.ctx(), te_id, cmd);
+        }
         let focused = ui.memory(|m| m.has_focus(te_id));
         if focused || self.pending_comment || self.pending_duplicate {
             self.handle_keys(ui, te_id, o);
@@ -517,8 +522,118 @@ impl Doc {
         if te.response.response.changed() {
             events.changed = true;
         }
+        // clic droit : les actions de base, comme dans tout éditeur
+        let sel = te.cursor_range.map(|r| !r.is_empty()).unwrap_or(false);
+        let (can_undo, can_redo) = egui::TextEdit::load_state(ui.ctx(), te_id).and_then(|st| {
+            let r = st.cursor.char_range()?;
+            let cur = (r, self.text.clone());
+            let u = st.undoer();
+            Some((u.has_undo(&cur), u.has_redo(&cur)))
+        }).unwrap_or((false, false));
+        te.response.response.context_menu(|ui| {
+            ui.set_min_width(250.0);
+            let mut item = |ui: &mut egui::Ui, t: &str, k: &str, on: bool| crate::icons::menu_action(ui, None, t, k, on).clicked();
+            if item(ui, "Annuler", "Ctrl+Z", can_undo) { self.pending_edit = Some(EditCmd::Undo); ui.close(); }
+            if item(ui, "Rétablir", "Ctrl+Y", can_redo) { self.pending_edit = Some(EditCmd::Redo); ui.close(); }
+            ui.separator();
+            if item(ui, "Couper", "Ctrl+X", sel) { self.pending_edit = Some(EditCmd::Cut); ui.close(); }
+            if item(ui, "Copier", "Ctrl+C", sel) { self.pending_edit = Some(EditCmd::Copy); ui.close(); }
+            if item(ui, "Coller", "Ctrl+V", true) {
+                if let Some(t) = crate::clip::get() { self.pending_edit = Some(EditCmd::Paste(t)); }
+                ui.close();
+            }
+            if item(ui, "Supprimer", "Suppr", sel) { self.pending_edit = Some(EditCmd::Delete); ui.close(); }
+            ui.separator();
+            if item(ui, "Tout sélectionner", "Ctrl+A", true) { self.pending_edit = Some(EditCmd::SelectAll); ui.close(); }
+            if item(ui, "Commenter / décommenter", "", true) { self.pending_comment = true; ui.close(); }
+            if item(ui, "Dupliquer la ligne", "", true) { self.pending_duplicate = true; ui.close(); }
+        });
+        if self.pending_edit.is_some() || self.pending_comment || self.pending_duplicate { ui.ctx().request_repaint(); }
         ui.allocate_rect(full, Sense::hover());
         events
+    }
+
+    /// Texte sélectionné (sur une seule ligne), pour pré-remplir la recherche.
+    pub fn selected_text(&self, ctx: &egui::Context) -> Option<String> {
+        let st = egui::TextEdit::load_state(ctx, self.id.with("te"))?;
+        let r = st.cursor.char_range()?.as_sorted_char_range();
+        let (s, e) = (char_to_byte(&self.text, r.start.0), char_to_byte(&self.text, r.end.0));
+        let t = self.text.get(s..e)?;
+        if t.is_empty() || t.contains('\n') { None } else { Some(t.to_string()) }
+    }
+
+    /// Exécute une commande du menu Édition / clic droit, en gardant l'historique d'annulation.
+    pub fn apply_edit(&mut self, ctx: &egui::Context, te_id: egui::Id, cmd: EditCmd) {
+        let mut state = egui::TextEdit::load_state(ctx, te_id).unwrap_or_default();
+        let n = self.text.chars().count();
+        let range = state.cursor.char_range().unwrap_or(CCursorRange::one(CCursor::new(CharIndex(n))));
+        let sorted = range.as_sorted_char_range();
+        let (a, b) = (sorted.start.0.min(n), sorted.end.0.min(n));
+        let (s, e) = (char_to_byte(&self.text, a), char_to_byte(&self.text, b));
+        let mut undoer = state.undoer();
+        let before = (range, self.text.clone());
+        let mut set = |text: &mut String, new: &str, at: usize| -> CCursorRange {
+            undoer.add_undo(&before);
+            text.replace_range(s..e, new);
+            let c = at + new.chars().count();
+            CCursorRange::one(CCursor::new(CharIndex(c)))
+        };
+        let new_range = match cmd {
+            EditCmd::Undo | EditCmd::Redo => {
+                let r = if cmd == EditCmd::Undo { undoer.undo(&before).cloned() } else { undoer.redo(&before).cloned() };
+                match r {
+                    Some((c, t)) => { self.text = t; c }
+                    None => range,
+                }
+            }
+            EditCmd::Copy => { if s < e { ctx.copy_text(self.text[s..e].to_string()); } range }
+            EditCmd::Cut => {
+                if s < e { ctx.copy_text(self.text[s..e].to_string()); set(&mut self.text, "", a) } else { range }
+            }
+            EditCmd::Delete => if s < e { set(&mut self.text, "", a) } else { range },
+            EditCmd::Paste(t) => set(&mut self.text, &t, a),
+            EditCmd::SelectAll => CCursorRange::two(CCursor::new(CharIndex(0)), CCursor::new(CharIndex(n))),
+            EditCmd::DeleteLine | EditCmd::MoveLineUp | EditCmd::MoveLineDown => {
+                // lignes touchées par la sélection
+                let ls = self.text[..s].rfind('\n').map(|x| x + 1).unwrap_or(0);
+                let e2 = if e > s && self.text[..e].ends_with('\n') { e - 1 } else { e };
+                let le = self.text[e2..].find('\n').map(|x| x + e2).unwrap_or(self.text.len());
+                let block = self.text[ls..le].to_string();
+                let cpos = |t: &str, b: usize| t[..b].chars().count();
+                match cmd {
+                    EditCmd::DeleteLine => {
+                        undoer.add_undo(&before);
+                        let (from, to) = if le < self.text.len() { (ls, le + 1) } else if ls > 0 { (ls - 1, le) } else { (ls, le) };
+                        self.text.replace_range(from..to, "");
+                        let c = cpos(&self.text, from.min(self.text.len()));
+                        let c = if from < ls { c + 1 } else { c }.min(self.text.chars().count());
+                        CCursorRange::one(CCursor::new(CharIndex(c)))
+                    }
+                    EditCmd::MoveLineUp if ls > 0 => {
+                        undoer.add_undo(&before);
+                        let ps = self.text[..ls - 1].rfind('\n').map(|x| x + 1).unwrap_or(0);
+                        let prev = self.text[ps..ls - 1].to_string();
+                        self.text.replace_range(ps..le, &format!("{block}\n{prev}"));
+                        let d = prev.chars().count() + 1;
+                        CCursorRange::two(CCursor::new(CharIndex(a - d)), CCursor::new(CharIndex(b - d)))
+                    }
+                    EditCmd::MoveLineDown if le < self.text.len() => {
+                        undoer.add_undo(&before);
+                        let ne = self.text[le + 1..].find('\n').map(|x| x + le + 1).unwrap_or(self.text.len());
+                        let next = self.text[le + 1..ne].to_string();
+                        self.text.replace_range(ls..ne, &format!("{next}\n{block}"));
+                        let d = next.chars().count() + 1;
+                        CCursorRange::two(CCursor::new(CharIndex(a + d)), CCursor::new(CharIndex(b + d)))
+                    }
+                    _ => range,
+                }
+            }
+        };
+        state.set_undoer(undoer);
+        state.cursor.set_char_range(Some(new_range));
+        state.store(ctx, te_id);
+        self.cache = None;
+        ctx.memory_mut(|m| m.request_focus(te_id));
     }
 
     fn handle_keys(&mut self, ui: &mut egui::Ui, te_id: egui::Id, o: &EditorOpts) {
@@ -649,9 +764,28 @@ impl Doc {
         ctx.memory_mut(|m| m.request_focus(te_id));
     }
 
+    pub fn has_focus(&self, ctx: &egui::Context) -> bool {
+        ctx.memory(|m| m.has_focus(self.id.with("te")))
+    }
+
     pub fn focus(&self, ctx: &egui::Context) {
         ctx.memory_mut(|m| m.request_focus(self.id.with("te")));
     }
+}
+
+/// Commandes du menu Édition et du clic droit (les raccourcis Ctrl+Z, Ctrl+C… sont gérés par egui).
+#[derive(Clone, Debug, PartialEq)]
+pub enum EditCmd {
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste(String),
+    Delete,
+    SelectAll,
+    DeleteLine,
+    MoveLineUp,
+    MoveLineDown,
 }
 
 /// Réglages de l'éditeur (fenêtre Paramètres).
@@ -834,6 +968,37 @@ mod tests {
         assert_eq!(find_ci("Ab ab AB", "ab", 1, false), Some((3, 5)));
         assert_eq!(find_ci("Ab ab AB", "ab", 3, true), Some((0, 2)));
         assert_eq!(find_ci("Ab ab AB", "ab", 0, true), Some((6, 8)));
+    }
+
+    fn run(text: &str, cur: usize, cmd: EditCmd) -> String {
+        let ctx = egui::Context::default();
+        let mut d = Doc::untitled(1, text);
+        let id = d.id.with("te");
+        let mut st = egui::text_edit::TextEditState::default();
+        st.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(CharIndex(cur)))));
+        st.store(&ctx, id);
+        d.apply_edit(&ctx, id, cmd);
+        d.text
+    }
+
+    #[test]
+    fn line_commands() {
+        assert_eq!(run("a\nb\nc", 2, EditCmd::MoveLineUp), "b\na\nc");
+        assert_eq!(run("a\nb\nc", 2, EditCmd::MoveLineDown), "a\nc\nb");
+        assert_eq!(run("a\nb\nc", 0, EditCmd::MoveLineUp), "a\nb\nc");
+        assert_eq!(run("a\nb\nc", 2, EditCmd::DeleteLine), "a\nc");
+        assert_eq!(run("a\nb\nc", 4, EditCmd::DeleteLine), "a\nb");
+        assert_eq!(run("été", 3, EditCmd::Paste("ô".into())), "étéô");
+        let ctx = egui::Context::default();
+        let mut d = Doc::untitled(1, "abc");
+        let id = d.id.with("te");
+        d.apply_edit(&ctx, id, EditCmd::SelectAll);
+        d.apply_edit(&ctx, id, EditCmd::Delete);
+        assert_eq!(d.text, "");
+        d.apply_edit(&ctx, id, EditCmd::Undo);
+        assert_eq!(d.text, "abc");
+        d.apply_edit(&ctx, id, EditCmd::Redo);
+        assert_eq!(d.text, "");
     }
 
     #[test]

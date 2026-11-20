@@ -1433,8 +1433,10 @@ impl App {
         if self.key_capture.is_some() { return; } // la fenêtre Paramètres attend une touche
         let in_term = self.shown_term().map(|t| t.focused).unwrap_or(false) && self.show_bottom;
         let mut todo = Vec::new();
+        let editor_focus = self.cur().and_then(|i| self.tabs[i].doc()).map(|d| d.has_focus(ctx)).unwrap_or(false);
         for a in crate::settings::ACTIONS {
             if in_term && !a.works_in_terminal() { continue; }
+            if a.needs_editor() && !editor_focus { continue; }
             for sc in self.cfg.shortcuts(*a) {
                 if crate::settings::pressed(ctx, &sc) { todo.push(*a); break; }
             }
@@ -1459,12 +1461,31 @@ impl App {
             A::SaveAll => { for i in 0..self.tabs.len() { if self.tabs[i].dirty() { self.save_tab(i); } } }
             A::CloseTab => { if let Some(i) = self.cur() { self.close_tab(i, false); } }
             A::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            A::Find => {
+            A::Find | A::Replace => {
                 let pdf = self.cur().and_then(|i| if let Content::Pdf(v) = &mut self.tabs[i].c { Some(v) } else { None });
                 if let Some(v) = pdf { v.open_search(ctx); } else if self.cur().is_some() {
+                    // le texte sélectionné devient le texte cherché, comme partout
+                    if let Some(t) = self.cur_doc().and_then(|d| d.selected_text(ctx)) { self.find_text = t; }
                     self.find_open = true;
-                    ctx.memory_mut(|m| m.request_focus(egui::Id::new("find")));
+                    let field = if a == A::Replace { "replace" } else { "find" };
+                    ctx.memory_mut(|m| m.request_focus(egui::Id::new(field)));
                 }
+            }
+            A::FindNext | A::FindPrev => {
+                if let Some(t) = self.cur_doc().and_then(|d| d.selected_text(ctx)).filter(|_| self.find_text.is_empty()) { self.find_text = t; }
+                if !self.find_text.is_empty() {
+                    self.find_open = true;
+                    let q = self.find_text.clone();
+                    if let Some(d) = self.cur_doc() {
+                        d.find = Some(q);
+                        if a == A::FindNext { d.find_next = true; } else { d.find_back = true; }
+                    }
+                }
+            }
+            A::DeleteLine | A::MoveLineUp | A::MoveLineDown => {
+                use crate::editor::EditCmd;
+                let c = match a { A::DeleteLine => EditCmd::DeleteLine, A::MoveLineUp => EditCmd::MoveLineUp, _ => EditCmd::MoveLineDown };
+                if let Some(d) = self.cur_doc() { d.pending_edit = Some(c); }
             }
             A::Goto => { if self.cur_doc().is_some() { self.dialog = Some(Dialog::Goto(String::new())); } }
             A::Comment => { if let Some(d) = self.cur_doc() { d.pending_comment = true; } }

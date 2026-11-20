@@ -1,5 +1,20 @@
 # StudentCode en Rust — journal des versions
 
+## 2.0.2
+
+- **Copier / coller avec les autres programmes** : Ctrl+C, Ctrl+X, Ctrl+V ne passaient pas par
+  le presse-papiers du système (Windows comme Linux). C'est réparé partout : éditeur, champs,
+  terminal.
+- Éditeur : **clic droit** Annuler, Rétablir, Couper, Copier, Coller, Supprimer, Tout
+  sélectionner, Commenter, Dupliquer ; les mêmes actions dans le menu Édition.
+- Terminal : Ctrl+V et Ctrl+Maj+V collent, Ctrl+C copie la sélection (sinon interrompt le
+  programme), Ctrl+Maj+C copie ; « Coller » du clic droit marche.
+- Nouveaux raccourcis (modifiables) : Alt+↑ / Alt+↓ déplacer la ligne, Ctrl+Maj+K supprimer la
+  ligne, F3 / Maj+F3 occurrence suivante / précédente, Ctrl+H remplacer ; Ctrl+F reprend le
+  texte sélectionné.
+- Les raccourcis qui modifient le texte n'agissent que dans l'éditeur (plus dans un champ de
+  saisie).
+
 ## 2.0.1
 
 - Windows : le terminal restait vide (PowerShell ne démarrait pas). La console de Windows

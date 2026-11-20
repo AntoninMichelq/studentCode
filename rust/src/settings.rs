@@ -206,7 +206,7 @@ impl Settings {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
     New, OpenFile, OpenFolder, Save, SaveAs, SaveAll, CloseTab, Quit,
-    Find, Goto, Comment, DuplicateLine,
+    Find, FindNext, FindPrev, Replace, Goto, Comment, DuplicateLine, DeleteLine, MoveLineUp, MoveLineDown,
     Run, Debug, Stop, StepOver, StepInto, StepOut, Breakpoint,
     ToggleSide, ToggleBottom, Terminal, NewTerminal, SplitRight, NextTab, PrevTab,
     ZoomIn, ZoomOut, ZoomReset, Libs, Ssh, Vpn, Settings, Menu,
@@ -214,7 +214,8 @@ pub enum Action {
 
 pub const ACTIONS: &[Action] = &[
     Action::New, Action::OpenFile, Action::OpenFolder, Action::Save, Action::SaveAs, Action::SaveAll, Action::CloseTab, Action::Quit,
-    Action::Find, Action::Goto, Action::Comment, Action::DuplicateLine,
+    Action::Find, Action::FindNext, Action::FindPrev, Action::Replace, Action::Goto, Action::Comment, Action::DuplicateLine,
+    Action::DeleteLine, Action::MoveLineUp, Action::MoveLineDown,
     Action::Run, Action::Debug, Action::Stop, Action::StepOver, Action::StepInto, Action::StepOut, Action::Breakpoint,
     Action::ToggleSide, Action::ToggleBottom, Action::Terminal, Action::NewTerminal, Action::SplitRight, Action::NextTab, Action::PrevTab,
     Action::ZoomIn, Action::ZoomOut, Action::ZoomReset, Action::Libs, Action::Ssh, Action::Vpn, Action::Settings, Action::Menu,
@@ -226,6 +227,8 @@ impl Action {
         match self {
             New => "new", OpenFile => "open_file", OpenFolder => "open_folder", Save => "save", SaveAs => "save_as",
             SaveAll => "save_all", CloseTab => "close_tab", Quit => "quit", Find => "find", Goto => "goto",
+            FindNext => "find_next", FindPrev => "find_prev", Replace => "replace", DeleteLine => "delete_line",
+            MoveLineUp => "line_up", MoveLineDown => "line_down",
             Comment => "comment", DuplicateLine => "duplicate", Run => "run", Debug => "debug", Stop => "stop",
             StepOver => "step_over", StepInto => "step_into", StepOut => "step_out", Breakpoint => "breakpoint",
             ToggleSide => "toggle_side", ToggleBottom => "toggle_bottom", Terminal => "terminal",
@@ -235,12 +238,19 @@ impl Action {
         }
     }
 
+    /// Actions qui modifient le texte : seulement quand l'éditeur a le clavier (pas dans un champ).
+    pub fn needs_editor(self) -> bool {
+        matches!(self, Action::Comment | Action::DuplicateLine | Action::DeleteLine | Action::MoveLineUp | Action::MoveLineDown)
+    }
+
     pub fn label(self) -> &'static str {
         use Action::*;
         match self {
             New => "Nouveau fichier", OpenFile => "Ouvrir un fichier", OpenFolder => "Ouvrir un dossier",
             Save => "Enregistrer", SaveAs => "Enregistrer sous", SaveAll => "Tout enregistrer", CloseTab => "Fermer l'onglet",
             Quit => "Quitter", Find => "Rechercher / Remplacer", Goto => "Aller à la ligne", Comment => "Commenter / décommenter",
+            FindNext => "Occurrence suivante", FindPrev => "Occurrence précédente", Replace => "Remplacer",
+            DeleteLine => "Supprimer la ligne", MoveLineUp => "Monter la ligne", MoveLineDown => "Descendre la ligne",
             DuplicateLine => "Dupliquer la ligne", Run => "Exécuter", Debug => "Déboguer / continuer", Stop => "Arrêter",
             StepOver => "Pas à pas (par-dessus)", StepInto => "Entrer dans la fonction", StepOut => "Sortir de la fonction",
             Breakpoint => "Point d'arrêt", ToggleSide => "Afficher / masquer le panneau latéral",
@@ -258,6 +268,8 @@ impl Action {
         match self {
             New => "Ctrl+N", OpenFile => "Ctrl+O", OpenFolder => "Ctrl+Maj+O", Save => "Ctrl+S", SaveAs => "Ctrl+Maj+S",
             SaveAll => "", CloseTab => "Ctrl+W", Quit => "Ctrl+Q", Find => "Ctrl+F", Goto => "Ctrl+G",
+            FindNext => "F3", FindPrev => "Maj+F3", Replace => "Ctrl+H", DeleteLine => "Ctrl+Maj+K",
+            MoveLineUp => "Alt+Haut", MoveLineDown => "Alt+Bas",
             Comment => "Ctrl+/ ou Ctrl+:", DuplicateLine => "Ctrl+D", Run => "F5", Debug => "F6", Stop => "Maj+F5",
             StepOver => "F10", StepInto => "F11", StepOut => "Maj+F11", Breakpoint => "F9", ToggleSide => "Ctrl+B",
             ToggleBottom => "Ctrl+J ou Ctrl+`", Terminal => "Alt+T", NewTerminal => "Ctrl+Maj+`", SplitRight => "Ctrl+\\",
@@ -434,6 +446,18 @@ mod tests {
                 seen.push(sc);
             }
         }
+    }
+
+    #[test]
+    fn arrows_and_new_actions() {
+        let c = Settings::default();
+        let up = c.shortcut(Action::MoveLineUp).unwrap();
+        assert_eq!(up.key, Key::ArrowUp);
+        assert!(up.alt && !up.ctrl);
+        assert_eq!(c.shortcut_text(Action::DeleteLine), "Ctrl+Maj+K");
+        // aucun raccourci par défaut en double
+        let mut seen = std::collections::HashMap::new();
+        for a in ACTIONS { for sc in c.shortcuts(*a) { assert!(seen.insert(sc.to_string(), *a).is_none(), "doublon {sc}"); } }
     }
 
     #[test]
