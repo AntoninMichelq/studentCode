@@ -1,5 +1,12 @@
 # Journal des versions
 
+## 1.1.5
+
+- SSH : plusieurs terminaux sur la même machine. Clic droit sur l'onglet « SSH … » du panneau du
+  bas (ou sur la machine dans le panneau SSH, ou menu « … ») → **Nouveau terminal** ; sur un
+  dossier de l'explorateur distant → **Nouveau terminal ici**. Les terminaux en plus ont une
+  croix pour les fermer et se ferment à la déconnexion.
+
 ## 1.1.4
 
 - Coloration plus riche en C, C++, Java, C#, JavaScript… : types (`Model`, `size_t`, `String`)

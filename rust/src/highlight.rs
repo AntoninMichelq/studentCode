@@ -121,6 +121,21 @@ const KT_KW: &str = "as break class continue do else false for fun if in interfa
 const PY_KW: &str = "False None True and as assert async await break class continue def del elif else except \
     finally for from global if import in is lambda nonlocal not or pass raise return try while with yield \
     match case self cls";
+const GRADLE_TYPES: &str = "Int Long Double Float String Boolean Char Unit Any List Map Set \
+    plugins id version apply dependencies repositories implementation api compileOnly \
+    runtimeOnly testImplementation testRuntimeOnly testCompileOnly annotationProcessor \
+    mavenCentral mavenLocal google gradlePluginPortal maven url application mainClass \
+    java toolchain languageVersion JavaLanguageVersion sourceCompatibility targetCompatibility \
+    tasks task register named withType doLast doFirst dependsOn test useJUnitPlatform jar \
+    manifest attributes from into include exclude sourceSets main resources srcDir srcDirs \
+    group description ext buildscript allprojects subprojects project rootProject \
+    settings pluginManagement dependencyResolutionManagement libs platform enforcedPlatform \
+    kotlin android defaultConfig compileSdk minSdk targetSdk namespace wrapper \
+    gradleVersion distributionType run standardInput args jvmArgs systemProperty";
+
+/// Mots-clés du lexer Python de QScintilla (version Python de StudentCode).
+const PY_QSCI_KW: &str = "False None True and as assert async await break class continue def del elif else except \
+    finally for from global if import in is lambda nonlocal not or pass raise return try while with yield";
 const PY_BUILTINS: &str = "print len range int str float list dict set tuple bool open input enumerate zip map \
     filter sorted reversed sum min max abs round isinstance type super repr hash iter next any all ord chr \
     format id dir vars getattr setattr hasattr divmod pow bytes bytearray object Exception ValueError \
@@ -162,7 +177,8 @@ impl Rules {
             Lang::Ts => (vec![JS_KW, TS_KW], "", "console document window Math JSON Promise Array Object"),
             Lang::Rust => (vec![RUST_KW], RUST_TYPES, ""),
             Lang::Go => (vec![GO_KW], GO_TYPES, ""),
-            Lang::Kotlin => (vec![KT_KW], "Int Long Double Float String Boolean Char Unit Any List Map Set", ""),
+            // .gradle / .kts : le vocabulaire de Gradle en jaune (2e liste de mots-clés de la version Python)
+            Lang::Kotlin => (vec![KT_KW, "def as in trait it println"], GRADLE_TYPES, ""),
             Lang::Python => (vec![PY_KW], "", PY_BUILTINS),
             Lang::Shell | Lang::Make => (vec![SH_KW], "", ""),
             Lang::PowerShell => (vec![PS_KW], "", ""),
@@ -320,6 +336,8 @@ pub fn highlight(text: &str, lang: Lang, p: &Palette, font: &FontId) -> LayoutJo
     let mut prepro_line = false;
     let mut include_line = false;
     let mut md_code = false;
+    // préfixe d'une chaîne Python (f"…", r'…', b"…") : coloré avec la chaîne, comme QScintilla
+    let mut str_prefix: Option<usize> = None;
     while i < n {
         let c = b[i];
         let starts = |pat: &str| !pat.is_empty() && b[i..].starts_with(pat.as_bytes());
@@ -438,7 +456,7 @@ pub fn highlight(text: &str, lang: Lang, p: &Palette, font: &FontId) -> LayoutJo
         }
         // chaînes
         if c == b'"' || c == b'\'' || (c == b'`' && matches!(lang, Lang::Js | Lang::Ts | Lang::Go | Lang::Shell)) {
-            let s = i;
+            let s = str_prefix.take().unwrap_or(i);
             // en Rust, ' est souvent une durée de vie : 'a
             if c == b'\'' && lang == Lang::Rust && !(i + 2 < n && (b[i + 2] == b'\'' || b[i + 1] == b'\\')) {
                 i += 1;
@@ -488,6 +506,29 @@ pub fn highlight(text: &str, lang: Lang, p: &Palette, font: &FontId) -> LayoutJo
             }
             // variables shell $NOM, ${NOM}
             let w = &text[s..i];
+            if lang == Lang::Python {
+                // comme le lexer Python de la version Python (QScintilla) : mots-clés en violet, nom
+                // après def en bleu, après class en jaune, tout le reste (len, print, self…) normal
+                if i < n && (b[i] == b'"' || b[i] == b'\'') && w.len() <= 2
+                    && w.bytes().all(|x| matches!(x.to_ascii_lowercase(), b'r' | b'b' | b'f' | b'u')) {
+                    str_prefix = Some(s);
+                    continue;
+                }
+                let prev = text[..s].trim_end_matches([' ', '\t']);
+                let prev_word = &prev[prev.rfind(|ch: char| !(ch.is_alphanumeric() || ch == '_')).map(|x| x + 1).unwrap_or(0)..];
+                let k = if PY_QSCI_KW.split_whitespace().any(|kw| kw == w) {
+                    Kind::Keyword
+                } else if prev_word == "def" && prev.len() < s {
+                    Kind::Func
+                } else if prev_word == "class" && prev.len() < s {
+                    Kind::Type
+                } else {
+                    Kind::Text
+                };
+                push(&mut job, s, i, k);
+                line_start = false;
+                continue;
+            }
             let k = if lang == Lang::Css {
                 if b[i..].iter().copied().find(|x| *x != b' ') == Some(b':') { Kind::Func } else { Kind::Text }
             } else if matches!(lang, Lang::Json | Lang::Yaml | Lang::Toml) {
@@ -527,7 +568,8 @@ pub fn highlight(text: &str, lang: Lang, p: &Palette, font: &FontId) -> LayoutJo
         }
         // opérateurs et ponctuation (UTF-8 : on avance d'un caractère entier)
         let len = utf8_len(c);
-        let k = if b"+-*/%=<>!&|^~?:".contains(&c) { Kind::Op } else { Kind::Text };
+        // comme les lexers QScintilla de la version Python : toute la ponctuation est un « opérateur » (cyan)
+        let k = if b"+-*/%=<>!&|^~?:".contains(&c) || ((lang == Lang::Python || lang.brace_family()) && b"()[]{}.,;".contains(&c)) { Kind::Op } else { Kind::Text };
         push(&mut job, i, (i + len).min(n), k);
         i += len;
         line_start = false;
@@ -590,8 +632,13 @@ mod tests {
         assert_eq!(col(&v, "class"), p.magenta);
         assert_eq!(col(&v, "Message"), p.yellow);
         assert_eq!(col(&v, "code"), p.blue);
-        assert_eq!(col(&v, "print"), p.blue);
+        // comme QScintilla : les fonctions appelées et self restent de la couleur du texte, la ponctuation en cyan
+        assert_eq!(col(&v, "print"), p.fg);
+        assert_eq!(col(&v, "self"), p.fg);
+        assert_eq!(col(&v, "("), p.cyan);
         assert_eq!(col(&v, "# c"), p.comment);
+        let f = kinds("x = f\"a{b}\"\n", Lang::Python);
+        assert_eq!(col(&f, "f\"a{b}\""), p.green);
         assert_eq!(col(&v, "\"\"\"doc\"\"\""), p.green);
         let v = kinds("public class App { static final int MAX = 4; void run(String s) { s.length(); } }", Lang::Java);
         assert_eq!(col(&v, "App"), p.yellow);

@@ -43,6 +43,27 @@ impl Lab {
     }
 }
 
+/// Ouvre le terminal du système avec « ssh » vers la machine (menu « … » du panneau SSH).
+pub fn external_terminal(lab: &Lab) {
+    let target = format!("{}@{}", lab.user, lab.host);
+    let port = lab.port.to_string();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("cmd").args(["/c", "start", "", "cmd", "/k", "ssh", "-p", &port, &target])
+            .creation_flags(0x0800_0000).spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        for (term, sep) in [("x-terminal-emulator", "-e"), ("gnome-terminal", "--"), ("konsole", "-e"), ("xfce4-terminal", "-x"), ("xterm", "-e")] {
+            if crate::runner::which(term).is_some() {
+                let _ = std::process::Command::new(term).args([sep, "ssh", "-p", &port, &target]).spawn();
+                return;
+            }
+        }
+    }
+}
+
 /// « ubuntu@10.11.0.2 », « Serveur = ubuntu@10.11.0.2 », « 10.11.0.2:2222 »
 pub fn quick_parse(text: &str) -> Option<Lab> {
     let (name, rest) = match text.split_once('=') {

@@ -61,6 +61,10 @@ pub struct PdfView {
     hit: usize,
     info: String,
     last_width: f32,
+    /// barre flottante : visible jusqu'à cet instant (elle se cache après 2,2 s, comme la version Python)
+    bar_until: f64,
+    page_in: String,
+    pub search_open: bool,
 }
 
 fn positions_file() -> Option<PathBuf> {
@@ -87,7 +91,7 @@ impl PdfView {
             path: path.to_path_buf(), doc, sizes, zoom: if zoom > 0.0 { zoom } else { 1.0 },
             fit: if zoom > 0.0 { Fit::Free } else { Fit::Width }, dark: false, cache: HashMap::new(),
             order: VecDeque::new(), page, goto: Some(page), query: String::new(), hits: Vec::new(), hit: 0,
-            info: String::new(), last_width: 0.0,
+            info: String::new(), bar_until: 0.0, page_in: String::new(), search_open: false, last_width: 0.0,
         })
     }
 
@@ -169,43 +173,7 @@ impl PdfView {
     pub fn ui(&mut self, ui: &mut egui::Ui, p: &Palette) {
         let ctx = ui.ctx().clone();
         let n = self.sizes.len();
-        // barre d'outils
-        egui::Frame::new().fill(p.bg_dark).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
-            egui::ScrollArea::horizontal().id_salt(("pdfbar", &self.path))
-                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(format!("{} / {}", self.page + 1, n)).color(p.comment));
-                if icons::small(ui, Icon::ChevronLeft, p.fg, p.bg_hl, "Page précédente (Page préc.)").clicked() && self.page > 0 { self.goto = Some(self.page - 1); }
-                if icons::small(ui, Icon::ChevronRight, p.fg, p.bg_hl, "Page suivante (Page suiv.)").clicked() && self.page + 1 < n { self.goto = Some(self.page + 1); }
-                ui.separator();
-                if ui.small_button("−").on_hover_text("Réduire (Ctrl+molette)").clicked() { self.fit = Fit::Free; self.zoom = (self.zoom / 1.2).max(0.2); }
-                ui.label(egui::RichText::new(format!("{:.0} %", self.zoom * 100.0)).color(p.comment));
-                if ui.small_button("+").on_hover_text("Agrandir (Ctrl+molette)").clicked() { self.fit = Fit::Free; self.zoom = (self.zoom * 1.2).min(6.0); }
-                if ui.selectable_label(self.fit == Fit::Width, "Largeur").clicked() { self.fit = Fit::Width; }
-                if ui.selectable_label(self.fit == Fit::Page, "Page entière").clicked() { self.fit = Fit::Page; }
-                if ui.selectable_label(self.dark, "Sombre").clicked() { self.dark = !self.dark; }
-                ui.separator();
-                let r = ui.add(egui::TextEdit::singleline(&mut self.query).hint_text("Rechercher dans le PDF").desired_width(170.0));
-                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    if self.hits.is_empty() { self.search(); } else { self.next_hit(1); }
-                    r.request_focus();
-                }
-                if !self.hits.is_empty() {
-                    if icons::small(ui, Icon::ChevronUp, p.fg, p.bg_hl, "Résultat précédent").clicked() { self.next_hit(-1); }
-                    if icons::small(ui, Icon::ChevronDown, p.fg, p.bg_hl, "Résultat suivant").clicked() { self.next_hit(1); }
-                }
-                if r.changed() { self.hits.clear(); self.info.clear(); }
-                ui.label(egui::RichText::new(&self.info).color(p.comment).size(12.0));
-                ui.separator();
-                if ui.small_button("Copier le texte").on_hover_text("Copie le texte de la page affichée").clicked() {
-                    ctx.copy_text(self.page_text(self.page));
-                }
-                if icons::small(ui, Icon::Folder, p.comment, p.bg_hl, "Ouvrir avec l'application par défaut").clicked() {
-                    let _ = open::that_detached(&self.path);
-                }
-            });
-            });
-        });
+        let area = ui.available_rect_before_wrap();
         let avail = ui.available_size();
         if (avail.x - self.last_width).abs() > 1.0 { self.last_width = avail.x; }
         let gap = 12.0;
@@ -291,11 +259,94 @@ impl PdfView {
                 }
             }
         }
+        self.floating_bar(ui, p, area, n);
         // clavier : pages
         if ui.ui_contains_pointer() {
             if ui.input(|i| i.key_pressed(egui::Key::PageDown)) && self.page + 1 < n { self.goto = Some(self.page + 1); }
             if ui.input(|i| i.key_pressed(egui::Key::PageUp)) && self.page > 0 { self.goto = Some(self.page - 1); }
         }
+    }
+
+    /// Barre flottante en haut à droite, comme dans la version Python : page, zoom, largeur,
+    /// page entière, mode sombre, recherche, ouvrir avec le système.
+    fn floating_bar(&mut self, ui: &mut egui::Ui, p: &Palette, area: Rect, n: usize) {
+        let ctx = ui.ctx().clone();
+        let now = ctx.input(|i| i.time);
+        let moved = ctx.input(|i| i.pointer.delta() != Vec2::ZERO || i.smooth_scroll_delta != Vec2::ZERO);
+        if (moved && ui.rect_contains_pointer(area)) || self.bar_until == 0.0 { self.bar_until = now + 2.2; }
+        let busy = self.search_open && !self.query.is_empty();
+        let bar_id = egui::Id::new(("pdf_bar", &self.path));
+        let hovered = ctx.memory(|m| m.area_rect(bar_id)).map(|r| ui.rect_contains_pointer(r)).unwrap_or(false);
+        let focus_in = ctx.memory(|m| m.focused()).map(|f| f == egui::Id::new(("pdf_page", &self.path)) || f == egui::Id::new(("pdf_find", &self.path))).unwrap_or(false);
+        if hovered || busy || focus_in { self.bar_until = self.bar_until.max(now + 0.5); }
+        if now > self.bar_until { return; }
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64((self.bar_until - now).max(0.05)));
+        if !focus_in { self.page_in = (self.page + 1).to_string(); }
+        egui::Area::new(bar_id).order(egui::Order::Foreground).pivot(egui::Align2::RIGHT_TOP)
+            .fixed_pos(egui::pos2(area.max.x - 10.0, area.min.y + 8.0)).show(&ctx, |ui| {
+            egui::Frame::new().fill(p.bg).stroke(egui::Stroke::new(1.0, p.bg_hl)).corner_radius(8)
+                .inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    let tool = |ui: &mut egui::Ui, ic: Icon, c: Color32, tip: &str, on: bool| {
+                        let (r, resp) = ui.allocate_exact_size(Vec2::new(24.0, 24.0), egui::Sense::click());
+                        if on || resp.hovered() { ui.painter().rect_filled(r, 5.0, p.bg_hl); }
+                        icons::paint(ui.painter(), ic, r.center(), 16.0, c);
+                        resp.on_hover_text(tip)
+                    };
+                    let field = |ui: &mut egui::Ui, text: &mut String, w: f32, id: egui::Id, hint: &str| -> egui::Response {
+                        let (r, _) = ui.allocate_exact_size(Vec2::new(w, 22.0), egui::Sense::hover());
+                        let foc = ui.memory(|m| m.has_focus(id));
+                        ui.painter().rect_filled(r, 4.0, p.bg);
+                        ui.painter().rect_stroke(r, 4.0, egui::Stroke::new(1.0, if foc { p.blue } else { p.gutter }), egui::StrokeKind::Inside);
+                        let mut cu = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(Vec2::new(5.0, 2.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+                        cu.add(egui::TextEdit::singleline(text).id(id).frame(egui::Frame::NONE).hint_text(hint)
+                            .horizontal_align(if w < 60.0 { egui::Align::Center } else { egui::Align::Min }).desired_width(r.width() - 10.0))
+                    };
+                    let pid = egui::Id::new(("pdf_page", &self.path));
+                    let r = field(ui, &mut self.page_in, 38.0, pid, "");
+                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        if let Ok(k) = self.page_in.trim().parse::<usize>() { self.goto = Some(k.clamp(1, n.max(1)) - 1); }
+                    }
+                    ui.label(egui::RichText::new(format!("/ {n}")).color(p.comment));
+                    ui.add_space(6.0);
+                    if tool(ui, Icon::Min, p.fg, "Zoom arrière (Ctrl+−)", false).clicked() { self.fit = Fit::Free; self.zoom = (self.zoom / 1.2).max(0.2); }
+                    let (zr, _) = ui.allocate_exact_size(Vec2::new(46.0, 24.0), egui::Sense::hover());
+                    ui.painter().text(zr.center(), egui::Align2::CENTER_CENTER, format!("{:.0} %", self.zoom * 100.0), egui::FontId::proportional(13.3), p.comment);
+                    if tool(ui, Icon::NewPlus, p.fg, "Zoom avant (Ctrl++)", false).clicked() { self.fit = Fit::Free; self.zoom = (self.zoom * 1.2).min(6.0); }
+                    if tool(ui, Icon::FitWidth, p.blue, "Ajuster à la largeur (Ctrl+0)", self.fit == Fit::Width).clicked() { self.fit = Fit::Width; }
+                    if tool(ui, Icon::FitPage, p.blue, "Page entière (une page à la fois)", self.fit == Fit::Page).clicked() {
+                        self.fit = if self.fit == Fit::Page { Fit::Width } else { Fit::Page };
+                    }
+                    if tool(ui, Icon::Moon, p.yellow, "Mode sombre pour le PDF", self.dark).clicked() { self.dark = !self.dark; self.cache.clear(); self.order.clear(); }
+                    if self.search_open {
+                        let fid = egui::Id::new(("pdf_find", &self.path));
+                        let r = field(ui, &mut self.query, 150.0, fid, "Rechercher…");
+                        if r.changed() { self.hits.clear(); self.info.clear(); }
+                        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            let back = ui.input(|i| i.modifiers.shift);
+                            if self.hits.is_empty() { self.search(); } else { self.next_hit(if back { -1 } else { 1 }); }
+                            r.request_focus();
+                        }
+                        if !self.info.is_empty() { ui.label(egui::RichText::new(&self.info).color(p.comment)); }
+                    }
+                    if tool(ui, Icon::Search, p.fg, "Rechercher (Ctrl+F)", self.search_open).clicked() {
+                        self.search_open = !self.search_open;
+                        if self.search_open { ctx.memory_mut(|m| m.request_focus(egui::Id::new(("pdf_find", &self.path)))); }
+                    }
+                    if tool(ui, Icon::External, p.comment, "Ouvrir dans l'application PDF du système", false).clicked() {
+                        let _ = open::that_detached(&self.path);
+                    }
+                });
+            });
+        });
+    }
+
+    /// Ctrl+F sur un PDF : la recherche de la barre flottante.
+    pub fn open_search(&mut self, ctx: &egui::Context) {
+        self.search_open = true;
+        self.bar_until = ctx.input(|i| i.time) + 2.2;
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new(("pdf_find", &self.path))));
     }
 
     fn next_hit(&mut self, d: i32) {

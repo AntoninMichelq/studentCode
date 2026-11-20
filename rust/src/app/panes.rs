@@ -63,6 +63,17 @@ impl App {
                 }
                 PaneOp::Split(uid, pane, vertical) => self.split_tab(uid, pane, vertical),
                 PaneOp::Move(uid, pane) => self.move_tab(uid, pane),
+                PaneOp::Reorder(uid, target, after) => {
+                    let (Some(a), Some(tp)) = (self.tabs.iter().position(|t| t.uid == uid),
+                                               self.tabs.iter().find(|t| t.uid == target).map(|t| t.pane)) else { continue };
+                    if self.tabs[a].pane != tp { self.move_tab(uid, tp); }
+                    let Some(a) = self.tabs.iter().position(|t| t.uid == uid) else { continue };
+                    let t = self.tabs.remove(a);
+                    let b = self.tabs.iter().position(|t| t.uid == target).map(|b| b + after as usize).unwrap_or(self.tabs.len());
+                    self.tabs.insert(b, t);
+                    self.pane_active.insert(tp, uid);
+                    self.focus_pane = tp;
+                }
             }
         }
     }
@@ -83,6 +94,7 @@ impl App {
         ui.painter().rect_filled(bar, 0.0, p.bg_dark);
         let ids: Vec<usize> = (0..self.tabs.len()).filter(|i| self.tabs[*i].pane == pane).collect();
         let mut bar_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar));
+        let mut tab_rects: Vec<(u64, Rect)> = Vec::new();
         egui::ScrollArea::horizontal().id_salt(("tabs", pane))
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
             .show(&mut bar_ui, |ui| {
@@ -91,28 +103,40 @@ impl App {
                     for &i in &ids {
                         let t = &self.tabs[i];
                         let is_active = Some(i) == active;
-                        let mut title = t.title();
-                        if let Some((_, _, lab)) = t.doc().and_then(|d| d.remote.as_ref()) { title = format!("{title} · {lab}"); }
-                        let w = ui.fonts_mut(|f| f.layout_no_wrap(title.clone(), FontId::proportional(13.0), p.fg)).size().x + 62.0;
+                        let title = t.title();
+                        // fichier distant : « Serveur ⇄ App.java » (comme la version Python)
+                        let lab = t.doc().and_then(|d| d.remote.as_ref()).map(|(_, _, l)| l.clone());
+                        // mesures de l'onglet Qt de la version Python : icône à 19 px, texte à 38 px, croix à 14 px du bord
+                        let tf = FontId::proportional(13.3);
+                        let tw = ui.fonts_mut(|f| f.layout_no_wrap(title.clone(), tf.clone(), p.fg)).size().x;
+                        let lw = lab.as_ref().map(|l| ui.fonts_mut(|f| f.layout_no_wrap(l.clone(), tf.clone(), p.fg)).size().x + 20.0).unwrap_or(0.0);
+                        let w = 38.0 + lw + tw + 45.0;
                         let (r, resp) = ui.allocate_exact_size(Vec2::new(w, 32.0), Sense::click_and_drag());
-                        let bg = if is_active { p.bg } else if resp.hovered() { p.bg_hl.gamma_multiply(0.6) } else { p.bg_dark };
-                        ui.painter().rect_filled(r, 0.0, bg);
                         if is_active {
-                            ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(2.0, if focused { p.blue } else { p.comment }));
+                            ui.painter().rect_filled(r, 0.0, p.bg);
+                            ui.painter().rect_filled(Rect::from_min_size(r.min, Vec2::new(r.width(), 2.0)), 0.0, if focused { p.blue } else { p.gutter });
                         }
                         let badge_name = match &t.c { Content::Pdf(_) => "x.pdf".to_string(), Content::Image(_) => "x.png".to_string(), _ => t.title() };
-                        explorer::file_badge(ui.painter(), egui::pos2(r.min.x + 16.0, r.center().y), &badge_name, &p);
-                        ui.painter().text(egui::pos2(r.min.x + 30.0, r.center().y), Align2::LEFT_CENTER, &title,
-                                          FontId::proportional(13.0), if is_active { p.fg } else { p.comment });
-                        let cb = Rect::from_center_size(egui::pos2(r.max.x - 15.0, r.center().y), Vec2::splat(16.0));
+                        let cy = r.center().y + 1.0;
+                        explorer::file_badge(ui.painter(), egui::pos2(r.min.x + 19.0, cy), &badge_name, &p);
+                        let tcol = if is_active && focused { p.fg } else if resp.hovered() { p.fg } else { p.comment };
+                        let mut x = r.min.x + 38.0;
+                        if let Some(l) = &lab {
+                            ui.painter().text(egui::pos2(x, cy), Align2::LEFT_CENTER, l, tf.clone(), tcol);
+                            x += lw - 20.0;
+                            crate::icons::paint(ui.painter(), crate::icons::Icon::Swap, egui::pos2(x + 10.0, cy), 13.0, tcol);
+                            x += 20.0;
+                        }
+                        ui.painter().text(egui::pos2(x, cy), Align2::LEFT_CENTER, &title, tf, tcol);
+                        let cb = Rect::from_center_size(egui::pos2(r.max.x - 14.0, cy), Vec2::splat(16.0));
                         let hover_close = ui.rect_contains_pointer(cb);
                         if t.dirty() && !hover_close {
                             ui.painter().circle_filled(cb.center(), 4.0, p.fg.gamma_multiply(0.8));
-                        } else if resp.hovered() || is_active {
-                            if hover_close { ui.painter().rect_filled(cb, 3.0, p.bg_hl); }
-                            crate::icons::paint(ui.painter(), crate::icons::Icon::Close, cb.center(), 10.0, if hover_close { p.red } else { p.comment });
+                        } else {
+                            crate::icons::paint(ui.painter(), crate::icons::Icon::Close, cb.center(), 15.0, if hover_close { p.red } else { p.comment });
                         }
                         let uid = t.uid;
+                        tab_rects.push((uid, r));
                         let path_txt = t.path().map(|x| x.to_string_lossy().to_string())
                             .or_else(|| t.doc().and_then(|d| d.remote.as_ref()).map(|(_, rp, lab)| format!("{lab}:{rp}")));
                         if resp.clicked() {
@@ -149,6 +173,7 @@ impl App {
             let find_open = self.find_open && focused;
             let find_text = self.find_text.clone();
             let can_bp = self.module.is_some();
+            let eopts = self.cfg.editor_opts();
             match &mut self.tabs[i].c {
                 Content::Doc(d) => {
                     let path = d.path.clone();
@@ -157,8 +182,8 @@ impl App {
                     };
                     d.find = if find_open { Some(find_text) } else { None };
                     let bp_ok = can_bp && d.lang == crate::highlight::Lang::Python && d.remote.is_none();
-                    let ev = d.ui(&mut body_ui, &p, &font, line_of(&dbg), line_of(&err), bp_ok);
-                    if ev.changed { self.error_line = None; }
+                    let ev = d.ui(&mut body_ui, &p, &font, line_of(&dbg), line_of(&err), bp_ok, &eopts);
+                    if ev.changed { self.error_line = None; self.last_edit = Some(std::time::Instant::now()); }
                     if let Some(line) = ev.breakpoint { self.sync_breakpoint(i, line); }
                     if find_open {
                         self.find_info = if ev.not_found { "aucun résultat".into() } else if ev.matches > 0 { format!("{} résultat(s)", ev.matches) } else { String::new() };
@@ -168,9 +193,31 @@ impl App {
                 Content::Image(v) => v.ui(&mut body_ui, &p),
             }
         }
+        // ---- onglet glissé dans une barre d'onglets : il prend sa place parmi les autres
+        if let Some(uid) = self.drag_tab {
+            if let Some(pos) = ui.ctx().pointer_hover_pos().filter(|pos| bar.contains(*pos)) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                let same_pane = self.tabs.iter().any(|t| t.uid == uid && t.pane == pane);
+                let released = ui.input(|i| i.pointer.any_released());
+                match tab_rects.iter().find(|(u, r)| *u != uid && r.contains(pos)) {
+                    Some((target, r)) => {
+                        let after = pos.x > r.center().x;
+                        // même volet : en direct ; autre volet : au relâchement
+                        if same_pane || released { self.pane_ops.push(PaneOp::Reorder(uid, *target, after)); }
+                        if !same_pane {
+                            let x = if after { r.max.x } else { r.min.x };
+                            let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop")));
+                            painter.line_segment([egui::pos2(x, r.min.y + 4.0), egui::pos2(x, r.max.y - 4.0)], Stroke::new(2.0, p.blue));
+                        }
+                    }
+                    None => if !same_pane && released { self.pane_ops.push(PaneOp::Move(uid, pane)); }
+                }
+                if released { self.drag_tab = None; }
+            }
+        }
         // ---- dépôt d'un onglet glissé : bord droit / bas = séparer, milieu = déplacer ici
         if let Some(uid) = self.drag_tab {
-            if let Some(pos) = ui.ctx().pointer_hover_pos().filter(|pos| rect.contains(*pos)) {
+            if let Some(pos) = ui.ctx().pointer_hover_pos().filter(|pos| body.contains(*pos)) {
                 let zone = if pos.x > body.max.x - body.width() * 0.3 { Zone::Right }
                            else if pos.y > body.max.y - body.height() * 0.3 { Zone::Bottom } else { Zone::Center };
                 let hint = match zone {

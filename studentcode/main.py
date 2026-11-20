@@ -13,7 +13,7 @@ import shutil
 import sys
 import threading
 
-__version__ = "1.1.4"
+__version__ = "1.1.5"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sysinfo import (APP_DIR, FROZEN, PYTHON_MISSING, WINDOWS, child_env, prepare_children, python_cmd,
                      python_exe, quote, restart_cmd, shell_cmd)
@@ -1711,6 +1711,9 @@ class MainWindow(QMainWindow):
         self.bottom.addTab(self.terminal, icon("terminal", GREEN, size=15), "Terminal  ")
         self.vpn_panel = VpnPanel(self)
         self.ssh_hub = RemoteHub(self)   # plusieurs machines en même temps, un terminal chacune
+        # clic droit sur un onglet du bas : « Nouveau terminal » sur la même machine
+        self.bottom.tabBar().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.bottom.tabBar().customContextMenuRequested.connect(self.bottom_menu)
         self.left.addTab(self.ssh_hub, icon("server", CYAN, size=15), "SSH")
         self.left.addTab(self.vpn_panel, icon("shield", GREEN, size=15), "VPN")
         # onglets des panneaux réordonnables à la souris ; l'ordre est retenu
@@ -3070,6 +3073,30 @@ class MainWindow(QMainWindow):
             return
         if not os.environ.get("STUDENTCODE_NO_RESTART"):
             QProcess.startDetached(*restart_cmd())
+
+    def bottom_menu(self, pos):
+        bar = self.bottom.tabBar()
+        i = bar.tabAt(pos)
+        w = self.bottom.widget(i) if i >= 0 else None
+        hub = self.ssh_hub
+        panel = hub.panel_of(w) if w is not None else None
+        m = QMenu(self)
+        acts = {}
+        if panel is not None and panel.lab is not None:
+            acts[m.addAction(icon("terminal", GREEN), "Nouveau terminal (même machine)")] = lambda: panel.new_terminal()
+            if w in panel.extras:
+                acts[m.addAction(icon("close", RED), "Fermer ce terminal")] = lambda: panel.close_terminal(w)
+        others = [p for p in hub.panels() if getattr(p, "lab", None) is not None and p is not panel]
+        if others:
+            if acts:
+                m.addSeparator()
+            for p in others:
+                acts[m.addAction(icon("server", GREEN), "Nouveau terminal SSH " + hub.title(p))] = (lambda p=p: p.new_terminal())
+        if not acts:
+            m.addAction("Connecte-toi à une machine (onglet SSH à gauche) pour ouvrir un terminal SSH").setEnabled(False)
+        r = m.exec(bar.mapToGlobal(pos))
+        if r in acts:
+            acts[r]()
 
     def show_terminal(self):
         self.bottom.show()

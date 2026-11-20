@@ -24,7 +24,7 @@ from PyQt6.QtCore import QObject, QProcess, QSettings, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                              QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
-                             QLineEdit, QMenu, QMessageBox, QPushButton, QSpinBox, QToolButton,
+                             QLineEdit, QMenu, QMessageBox, QPushButton, QSpinBox, QTabBar, QToolButton,
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from icons import file_icon, icon
@@ -34,7 +34,7 @@ from lazy import LazyModule, available
 HAS_SSH = available("paramiko")
 paramiko = LazyModule("paramiko")   # ~30 Mo, chargé seulement à la première connexion
 
-from theme import BLUE, COMMENT, CYAN, FG, GREEN, RED, YELLOW
+from theme import BG_HL, BLUE, COMMENT, CYAN, FG, GREEN, RED, YELLOW
 SERVICE = "studentcode-ssh"
 MAX_EDIT = 5 * 1024 * 1024
 DATA_DIR = os.path.join(os.path.expanduser("~"), ".config", "StudentCode")
@@ -472,6 +472,76 @@ class SSH(QObject):
             pass
 
 
+class ExtraShell(QObject):
+    """Un terminal SSH de plus sur une connexion déjà ouverte (autre canal, même machine)."""
+    raw = pyqtSignal(bytes)
+    ready = pyqtSignal()
+
+    def __init__(self, client, cols=200, rows=50, kind="xterm-256color", start_dir=None):
+        super().__init__()
+        self.ch = None
+        self.closed = False
+        self.pending = b""          # ce qui est tapé avant que le shell soit prêt
+        self.lock = threading.Lock()
+
+        def work():
+            try:
+                ch = client.invoke_shell(term=kind, width=cols, height=rows)
+                if start_dir:   # espace devant : la commande n'encombre pas l'historique
+                    ch.sendall((" cd %s && clear\n" % shlex.quote(start_dir)).encode("utf-8"))
+                with self.lock:
+                    self.ch = ch
+                    if self.pending:
+                        ch.sendall(self.pending)
+                        self.pending = b""
+                self.ready.emit()
+                while True:
+                    data = ch.recv(8192)
+                    if not data:
+                        break
+                    self.raw.emit(data)
+            except Exception as e:
+                if self.closed:
+                    return
+                try:
+                    self.raw.emit(("\r\n" + friendly(e) + "\r\n").encode("utf-8"))
+                except RuntimeError:
+                    return
+            self.ch = None
+            if not self.closed:
+                try:
+                    self.raw.emit(b"\r\n[session SSH terminee]\r\n")
+                except RuntimeError:
+                    pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def send(self, data):
+        try:
+            with self.lock:
+                if self.ch is not None:
+                    self.ch.sendall(data)
+                elif not self.closed:
+                    self.pending += data
+        except Exception:
+            pass
+
+    def resize(self, cols, rows):
+        try:
+            if self.ch is not None:
+                self.ch.resize_pty(width=cols, height=rows)
+        except Exception:
+            pass
+
+    def close(self):
+        self.closed = True
+        try:
+            if self.ch is not None:
+                self.ch.close()
+        except Exception:
+            pass
+        self.ch = None
+
+
 # ---------------------------------------------------------------- labs
 def load_labs():
     try:
@@ -831,6 +901,7 @@ class RemotePanel(QWidget):
         m.addSeparator()
         m.insertAction(m.actions()[0], self.a_rename)
         m.addAction(icon("key", YELLOW), "Oublier le mot de passe enregistré", self.forget_pw)
+        m.addAction(icon("terminal", GREEN), "Nouveau terminal SSH (dans StudentCode)", lambda: self.new_terminal())
         m.addAction(icon("terminal", GREEN), "Ouvrir un terminal système sur ce lab", self.external_terminal)
         m.addSeparator()
         self.a_hidden = m.addAction("Afficher les fichiers cachés")
@@ -875,6 +946,7 @@ class RemotePanel(QWidget):
         self.ssh.run_end.connect(self.run_finished)
         self.console.send.connect(self.console_send)
         self.console.resized.connect(self.ssh.shell_resize)
+        self.extras = []   # terminaux SSH ouverts en plus sur cette machine
         self.watch = QTimer(self)  # détecte une connexion tombée (lab arrêté, wifi coupé…)
         self.watch.setInterval(4000)
         self.watch.timeout.connect(self.check_alive)
@@ -1206,6 +1278,7 @@ class RemotePanel(QWidget):
         self.open_shell()
 
     def disconnect(self, msg="Déconnecté"):
+        self.close_extras()
         if self.win.rrun is self:
             self.ssh.run_stop()
         self.ssh.submit(self.ssh.close)
@@ -1496,6 +1569,67 @@ class RemotePanel(QWidget):
     def open_shell(self):
         self.ssh.start_shell(self.console.cols, self.console.rows, self.console.kind)
 
+    # ------------------------------------------------- terminaux en plus
+    def new_terminal(self, path=None):
+        """Un autre terminal sur cette machine (clic droit → « Nouveau terminal »)."""
+        if self.lab is None or self.ssh.client is None:
+            self.win.statusBar().showMessage("Connecte-toi d'abord à cette machine.", 5000)
+            return None
+        from terminal import make_term
+        console = make_term(self.win.code_font, "")
+        self.n_extra = getattr(self, "n_extra", 0) + 1
+        console.setObjectName("ssh_extra_%d_%d" % (id(self), self.n_extra))
+        sh = ExtraShell(self.ssh.client, getattr(console, "cols", 200), getattr(console, "rows", 50),
+                        getattr(console, "kind", "xterm-256color"), path)
+        sh.raw.connect(console.feed)
+        sh.ready.connect(lambda: sh.resize(console.cols, console.rows))
+        console.send.connect(sh.send)
+        console.resized.connect(sh.resize)
+        console.ssh_shell = sh       # garde le canal en vie avec l'onglet
+        self.extras.append(console)
+        b = self.win.bottom
+        mine = [b.indexOf(c) for c in [self.console] + self.extras[:-1] if b.indexOf(c) >= 0]
+        i = b.insertTab((max(mine) + 1) if mine else b.count(), console, icon("server", GREEN, size=15), "")
+        close = QToolButton()
+        close.setIcon(icon("close", COMMENT, size=14))
+        close.setAutoRaise(True)
+        close.setFixedSize(18, 18)
+        close.setToolTip("Fermer ce terminal")
+        close.setStyleSheet("QToolButton { padding: 0; border-radius: 4px; } QToolButton:hover { background: %s; }" % BG_HL)
+        close.clicked.connect(lambda: self.close_terminal(console))
+        b.tabBar().setTabButton(i, QTabBar.ButtonPosition.RightSide, close)
+        self.retitle_extras()
+        b.show()
+        b.setCurrentWidget(console)
+        console.setFocus()
+        return console
+
+    def retitle_extras(self):
+        b = self.win.bottom
+        name = self.hub.title(self) if self.hub else (self.lab or {}).get("name", "SSH")
+        for k, c in enumerate(self.extras):
+            j = b.indexOf(c)
+            if j >= 0:
+                b.setTabText(j, "SSH %s %d  " % (name, k + 2))
+
+    def close_terminal(self, console):
+        if console not in self.extras:
+            return
+        sh = getattr(console, "ssh_shell", None)
+        if sh is not None:
+            sh.close()
+        self.extras.remove(console)
+        b = self.win.bottom
+        j = b.indexOf(console)
+        if j >= 0:
+            b.removeTab(j)
+        console.deleteLater()
+        self.retitle_extras()
+
+    def close_extras(self):
+        for c in list(self.extras):
+            self.close_terminal(c)
+
     def console_send(self, data):
         if not self.connected():
             self.win.statusBar().showMessage("Connecte-toi d'abord à un lab (onglet SSH à gauche).", 5000)
@@ -1516,6 +1650,7 @@ class RemotePanel(QWidget):
         a_new = m.addAction(icon("new", FG), "Nouveau fichier…")
         a_dir = m.addAction(icon("folder", BLUE), "Nouveau dossier…")
         a_up = m.addAction(icon("upload", GREEN), "Envoyer des fichiers ici…")
+        a_term = m.addAction(icon("terminal", GREEN), "Nouveau terminal ici")
         a_ren = a_del = a_dl = a_cd = None
         if it:
             m.addSeparator()
@@ -1533,7 +1668,9 @@ class RemotePanel(QWidget):
         done = lambda d: (lambda _=None: self.refresh_dir(d))
         if r is None:
             return
-        if r == a_ref:
+        if r == a_term:
+            self.new_terminal(base)
+        elif r == a_ref:
             self.refresh_dir(base)
         elif r == a_copy:
             QApplication.clipboard().setText(path)
@@ -1644,6 +1781,8 @@ class RemoteHub(QWidget):
         self.tabs.setStyleSheet("QTabBar::tab { padding: 5px 8px; }")
         self.tabs.tabCloseRequested.connect(self.close_session)
         self.tabs.currentChanged.connect(self.session_shown)
+        self.tabs.tabBar().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tabs.tabBar().customContextMenuRequested.connect(self.sub_menu)
         plus = QToolButton()
         plus.setIcon(icon("new", GREEN))
         plus.setToolTip("Nouvelle connexion SSH (une autre machine en même temps)")
@@ -1656,6 +1795,27 @@ class RemoteHub(QWidget):
 
     def panels(self):
         return [self.tabs.widget(i) for i in range(self.tabs.count())]
+
+    def panel_of(self, widget):
+        """La connexion à laquelle appartient un terminal du panneau du bas."""
+        for p in self.panels():
+            if widget is p.console or widget in getattr(p, "extras", []):
+                return p
+        return None
+
+    def sub_menu(self, pos):
+        i = self.tabs.tabBar().tabAt(pos)
+        panel = self.tabs.widget(i) if i >= 0 else None
+        if panel is None or not HAS_SSH or panel.lab is None:
+            return
+        m = QMenu(self)
+        a_new = m.addAction(icon("terminal", GREEN), "Nouveau terminal")
+        a_off = m.addAction(icon("plug", RED), "Se déconnecter")
+        r = m.exec(self.tabs.tabBar().mapToGlobal(pos))
+        if r == a_new:
+            panel.new_terminal()
+        elif r == a_off:
+            panel.disconnect()
 
     def current_panel(self):
         return self.tabs.currentWidget()
@@ -1697,6 +1857,7 @@ class RemoteHub(QWidget):
         if j >= 0:
             b.setTabText(j, ("SSH " + self.title(panel) if on else "Terminal SSH") + "  ")
             b.setTabIcon(j, icon("server", GREEN if on else COMMENT, size=15))
+        panel.retitle_extras()
 
     def labs_changed(self, select=None):
         """La liste des machines a changé (renommage…) : les autres sous-onglets se mettent à jour."""

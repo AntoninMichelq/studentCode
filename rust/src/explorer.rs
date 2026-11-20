@@ -1,7 +1,7 @@
 //! Explorateur de fichiers : arborescence du dossier ouvert, dossiers dépliés retenus, menu
 //! clic droit (nouveau, renommer, supprimer…), glisser-déposer pour déplacer.
 use crate::theme::Palette;
-use eframe::egui::{self, Color32, FontId, Rect, Sense, Vec2};
+use eframe::egui::{self, Color32, FontId, Sense, Vec2};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -68,10 +68,10 @@ impl Explorer {
         }
         let mut actions = Vec::new();
         let title = root.file_name().map(|n| n.to_string_lossy().to_uppercase()).unwrap_or_else(|| root.to_string_lossy().to_string());
-        let head = ui.horizontal(|ui| {
-            ui.add_space(6.0);
-            ui.label(egui::RichText::new(title).strong().color(p.comment).size(12.0));
-        }).response;
+        // titre du dossier (QLabel#title de la version Python : gras, gris, 26 px de haut)
+        let (hr, head) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 26.0), Sense::click());
+        ui.painter().text(egui::pos2(hr.min.x + 23.0, hr.min.y + 12.0), egui::Align2::LEFT_CENTER, title,
+                          FontId::new(13.3, egui::FontFamily::Name("bold".into())), p.comment);
         head.context_menu(|ui| self.dir_menu(ui, root, &mut actions));
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -99,26 +99,25 @@ impl Explorer {
     fn tree(&mut self, ui: &mut egui::Ui, dir: &Path, depth: usize, p: &Palette, actions: &mut Vec<Action>) {
         let entries: Vec<(PathBuf, String, bool)> = self.list(dir).iter().map(|e| (e.path.clone(), e.name.clone(), e.dir)).collect();
         for (path, name, is_dir) in entries {
-            let row_h = 22.0;
+            // mêmes mesures que l'arbre Qt de la version Python : lignes de 24 px, flèche, icône, nom
+            let row_h = 24.0;
             let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), row_h), Sense::click_and_drag());
             let selected = self.selected.as_deref() == Some(path.as_path());
             let drop_here = is_dir && self.dragging.is_some() && resp.contains_pointer()
                 && self.dragging.as_deref() != Some(path.as_path());
-            if selected || resp.hovered() || drop_here {
-                ui.painter().rect_filled(rect, 3.0, if selected { p.bg_hl } else { p.bg_hl.gamma_multiply(0.6) });
+            if selected || drop_here {
+                ui.painter().rect_filled(rect, 0.0, p.bg_hl);
             }
-            let x = rect.min.x + 6.0 + depth as f32 * 14.0;
+            let x = rect.min.x + depth as f32 * 14.0;
             let cy = rect.center().y;
             let open = self.expanded.contains(&path);
             if is_dir {
-                crate::icons::paint(ui.painter(), if open { crate::icons::Icon::ChevronDown } else { crate::icons::Icon::ChevronRight },
-                                    egui::pos2(x + 4.0, cy), 12.0, p.comment);
-                folder_icon(ui.painter(), egui::pos2(x + 18.0, cy), p.blue);
+                branch_arrow(ui.painter(), egui::pos2(x + 11.0, cy), open, p.comment);
+                crate::icons::paint(ui.painter(), crate::icons::Icon::Folder, egui::pos2(x + 31.0, cy), 16.0, p.blue);
             } else {
-                file_badge(ui.painter(), egui::pos2(x + 18.0, cy), &name, p);
+                file_badge(ui.painter(), egui::pos2(x + 31.0, cy), &name, p);
             }
-            ui.painter().text(egui::pos2(x + 30.0, cy), egui::Align2::LEFT_CENTER, &name, FontId::proportional(13.5),
-                              if selected { p.fg } else { p.fg.gamma_multiply(0.92) });
+            ui.painter().text(egui::pos2(x + 46.0, cy), egui::Align2::LEFT_CENTER, &name, FontId::proportional(13.3), p.fg);
             if resp.clicked() {
                 self.selected = Some(path.clone());
                 if is_dir {
@@ -192,54 +191,18 @@ impl Explorer {
     }
 }
 
-pub fn folder_icon(painter: &egui::Painter, c: egui::Pos2, col: Color32) {
-    let body = Rect::from_center_size(c + Vec2::new(0.0, 1.0), Vec2::new(14.0, 10.0));
-    let tab = Rect::from_min_size(body.min - Vec2::new(0.0, 2.5), Vec2::new(6.0, 4.0));
-    painter.rect_filled(tab, 1.5, col);
-    painter.rect_filled(body, 2.0, col);
+
+/// Petite flèche pleine des arbres Qt (▸ fermé, ▾ ouvert).
+pub fn branch_arrow(painter: &egui::Painter, c: egui::Pos2, open: bool, col: Color32) {
+    let pts = if open {
+        vec![c + Vec2::new(-3.5, -1.8), c + Vec2::new(3.5, -1.8), c + Vec2::new(0.0, 2.2)]
+    } else {
+        vec![c + Vec2::new(-1.8, -3.5), c + Vec2::new(2.2, 0.0), c + Vec2::new(-1.8, 3.5)]
+    };
+    painter.add(egui::Shape::convex_polygon(pts, col, egui::Stroke::NONE));
 }
 
-/// Petite pastille colorée avec le type du fichier (comme la version Python).
+/// Icône du type de fichier (exactement celles de la version Python).
 pub fn file_badge(painter: &egui::Painter, c: egui::Pos2, name: &str, p: &Palette) {
-    let lower = name.to_lowercase();
-    let ext = lower.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
-    let (label, col): (&str, Color32) = match (lower.as_str(), ext) {
-        ("makefile", _) | (_, "mk") => ("mk", p.orange),
-        ("dockerfile", _) => ("D", p.blue),
-        (_, "py" | "pyw") => ("py", p.yellow),
-        (_, "c") => ("C", p.blue),
-        (_, "h" | "hpp") => ("H", p.magenta),
-        (_, "cpp" | "cc" | "cxx") => ("C+", p.blue),
-        (_, "java") => ("J", p.orange),
-        (_, "class" | "jar") => ("J", p.comment),
-        (_, "js" | "mjs") => ("JS", p.yellow),
-        (_, "ts" | "tsx") => ("TS", p.blue),
-        (_, "rs") => ("R", p.orange),
-        (_, "go") => ("Go", p.cyan),
-        (_, "cs") => ("C#", p.magenta),
-        (_, "kt" | "kts" | "gradle") => ("K", p.magenta),
-        (_, "html" | "htm") => ("<>", p.orange),
-        (_, "css" | "scss") => ("#", p.blue),
-        (_, "json") => ("{}", p.yellow),
-        (_, "md") => ("M", p.cyan),
-        (_, "sh" | "bash" | "zsh") => ("$", p.green),
-        (_, "ps1" | "bat" | "cmd") => ("ps", p.blue),
-        (_, "pdf") => ("pdf", p.red),
-        (_, "png" | "jpg" | "jpeg" | "gif" | "svg" | "bmp" | "webp") => ("img", p.magenta),
-        (_, "txt" | "log") => ("txt", p.comment),
-        (_, "sql") => ("sql", p.cyan),
-        (_, "xml" | "yml" | "yaml" | "toml" | "ini" | "cfg") => ("cfg", p.teal),
-        (_, "zip" | "gz" | "tar" | "7z") => ("zip", p.comment),
-        _ => ("", p.comment),
-    };
-    if label.is_empty() {
-        let r = Rect::from_center_size(c, Vec2::new(10.0, 13.0));
-        painter.rect_stroke(r, 1.5, egui::Stroke::new(1.2, col), egui::StrokeKind::Inside);
-        return;
-    }
-    let w = if label.len() >= 3 { 18.0 } else { 15.0 };
-    let r = Rect::from_center_size(c, Vec2::new(w, 13.0));
-    painter.rect_filled(r, 3.0, col);
-    painter.text(c, egui::Align2::CENTER_CENTER, label, FontId::proportional(if label.len() >= 3 { 7.5 } else { 9.0 }),
-                 p.bg_dark);
+    crate::icons::paint_file(painter, c, name, 15.0, p);
 }

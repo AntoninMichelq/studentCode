@@ -1,5 +1,89 @@
 # StudentCode en Rust — journal des versions
 
+## 2.0.0
+
+Première version stable de la réécriture en Rust (plus une préversion).
+
+**Tout se personnalise** — nouvelle fenêtre **Paramètres** (Ctrl+,) :
+
+- Apparence : thème, taille de l'interface (75 à 250 %), taille du code, polices du code et de
+  l'interface (toute police installée ou un fichier), barre d'état affichée ou non.
+- Disposition : panneau latéral à gauche ou à droite, panneau du bas en bas ou à droite, débogage
+  à droite ou à gauche ; ordre des onglets ; barre d'outils au choix (boutons, ordre,
+  séparateurs ; aussi par clic droit sur la barre).
+- Éditeur : tabulations (largeur, espaces ou tabulation), indentation automatique, fermeture
+  automatique de ( [ { " ', numéros de ligne, pliage, guides, ligne du curseur, parenthèse
+  correspondante, **retour à la ligne automatique**, **enregistrement automatique**, espaces
+  en fin de ligne enlevés.
+- Terminal et exécution : shell, taille du texte, historique, **interpréteur Python au choix**
+  (environnement virtuel), enregistrement avant l'exécution, Sortie effacée ou non.
+- **Raccourcis clavier modifiables**, avec détection des doublons.
+
+**Tout se déplace** :
+
+- les onglets de fichiers se réordonnent en les glissant, et passent d'un volet à l'autre en les
+  déposant dans sa barre d'onglets ;
+- les onglets du panneau latéral et du panneau du bas se réordonnent aussi ;
+- clic droit sur les onglets d'un panneau : le changer de côté, le masquer.
+
+**Corrections** :
+
+- les raccourcis comparent exactement les touches : Ctrl+Maj+S n'enregistre plus sans demander
+  le nom (Ctrl+S déclenchait avant Ctrl+Maj+S) ; Alt+M ouvre le menu ;
+- Ctrl+/ commente aussi sur un clavier AZERTY (Maj ignorée pour les signes comme / + :) ;
+- la recherche sans tenir compte des majuscules sélectionnait le mauvais texte après certains
+  caractères (ß, İ…), et « Remplacer tout » pouvait couper un caractère ;
+- les points d'arrêt sont gardés aussi pour les fichiers rouverts plus tard ;
+- les cases à cocher passent à la ligne dans un panneau étroit au lieu d'être coupées ;
+- la barre d'onglets du bas défile quand le panneau est étroit.
+
+## 2.0.0-alpha.4
+
+Même apparence que la version Python, élément par élément (comparé capture contre capture) :
+
+- **Icônes** : exactement celles de la version Python (mêmes dessins, générés par
+  `scripts/gen_rust_icons.py`), y compris les pastilles de type de fichier (`py`, `jv`, `gr`…).
+- **Barre d'outils** : mêmes boutons dans le même ordre (menu, nouveau, ouvrir, enregistrer,
+  exécuter, déboguer, pas à pas, arrêter, point d'arrêt, bibliothèques, rechercher, terminal,
+  volets, web, SSH, VPN), titre au centre ; dans une fenêtre étroite, les derniers boutons passent
+  dans un menu.
+- **Menu ☰** : Fichier, Édition, Exécution, Outils, Volets, Affichage, Aide, avec icônes et
+  raccourcis (Ctrl+O ouvrir un fichier, Ctrl+Maj+O un dossier, Ctrl+G aller à la ligne…).
+- **Panneau de gauche** : onglets Fichiers / SSH / VPN ; arbre aux mesures de Qt ; panneau SSH
+  (liste déroulante modifiable, prise, « … », chemin, état en bas) et panneau VPN (Ajouter,
+  liste, Garder internet, Connecter, clé, corbeille) identiques.
+- **Éditeur** : marges de QScintilla (numéros, points d'arrêt, flèches de pliage) avec
+  **pliage des blocs**, ligne du curseur bleutée, guides d'indentation en pointillés, accolade
+  correspondante en orange, coloration identique (Python : ponctuation en cyan, `print`/`len`
+  en blanc ; Gradle : vocabulaire en jaune), police 11 pt.
+- **Panneau du bas** : Sortie, Interpréteur Python (nouveau : un vrai interpréteur), Terminal,
+  Terminal SSH ; messages « ── Exécution : … ── » et champ de saisie comme la version Python.
+- **Débogage** : panneau VARIABLES (Nom / Type / Valeur), champ « Évaluer », PILE D'APPELS.
+- **Barre d'état** : bloc EDITION, état (« ⏸ débogage : à l'arrêt »…), fichier, position, Python.
+- **Page d'accueil** : onglet « Accueil » avec les mêmes liens et favoris ; le tout premier
+  lancement ouvre le fichier d'exemple `sans_titre_1.py`.
+- **Recherche** : barre sous l'éditeur (↑, ↓, Remplacer, Tout) ; **PDF** : barre flottante qui
+  se cache toute seule ; **Bibliothèques** : la même fenêtre que la version Python.
+- Thèmes repris tels quels de la version Python.
+
+## 2.0.0-alpha.3
+
+- **Plusieurs terminaux** : clic droit sur un onglet du bas → « Nouveau terminal » (même machine
+  SSH ou terminal local), bouton « + » à droite des onglets, Ctrl+Maj+`, « Nouveau terminal ici »
+  sur un dossier distant, « Nouveau terminal » sur une machine du panneau SSH. Les terminaux en
+  plus se ferment avec leur croix (ou clic milieu).
+- **Apparence de la version Python** (façon LazyVim) : onglets avec icônes et trait de couleur en
+  haut, pastilles de type de fichier identiques (`jv`, `gr`, `py`…), fichiers distants affichés
+  « Serveur ⇄ App.java », barre d'état façon lualine (bloc ÉDITION, chemin du fichier, position,
+  version de Python), barre d'outils avec écran partagé, Web, SSH et VPN, police du système pour
+  l'interface, guides d'indentation et parenthèse correspondante encadrée.
+- **Panneau SSH** comme la version Python : un sous-onglet par machine, sélecteur de machine avec
+  la prise pour se déconnecter et un menu « … », chemin modifiable avec dossier parent et
+  actualiser, état de la connexion en bas.
+- Au premier lancement, le thème choisi dans la version Python est repris ; thème « Papier
+  (clair) » ajouté.
+- `studentcode .` dans le dossier de la séance précédente rouvre ses fichiers.
+
 ## 2.0.0-alpha.2
 
 Toutes les fonctions de la version Python sont maintenant dans la version Rust (sauf l'aide par IA,

@@ -15,14 +15,23 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 mod panes;
 mod side;
 mod ui;
+mod prefs;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const URCA: &str = "https://cours.univ-reims.fr/local/mycoursesurca/courses.php";
+
+/// Favoris par défaut (les mêmes que la version Python).
+fn default_bookmarks() -> Vec<(String, String)> {
+    vec![("Mes cours URCA".into(), URCA.into()),
+         ("Bureau virtuel URCA".into(), "https://ebureau.univ-reims.fr".into()),
+         ("Site de l'URCA".into(), "https://www.univ-reims.fr".into()),
+         ("Documentation Python".into(), "https://docs.python.org/fr/3/".into())]
+}
 
 #[derive(Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -104,6 +113,31 @@ impl Layout {
     }
 }
 
+const DEMO: &str = "# Bienvenue dans StudentCode !
+#   F5  : exécuter          F6  : déboguer / continuer
+#   F9  : point d'arrêt     F10 : pas à pas (par-dessus)
+#   F11 : pas à pas (entrer dans la fonction)
+# Clique dans la marge à gauche d'une ligne pour poser un point d'arrêt.
+
+def fibonacci(n):
+    suite = [0, 1]
+    while len(suite) < n:
+        suite.append(suite[-1] + suite[-2])
+    return suite
+
+
+def moyenne(valeurs):
+    total = 0
+    for v in valeurs:
+        total += v
+    return total / len(valeurs)
+
+
+nombres = fibonacci(10)
+print(\"Fibonacci :\", nombres)
+print(\"Moyenne   :\", moyenne(nombres))
+";
+
 pub(crate) enum Content {
     Doc(Doc),
     Pdf(Box<PdfView>),
@@ -143,16 +177,16 @@ impl Tab {
 }
 
 #[derive(PartialEq, Clone, Copy)]
-enum Bottom { Terminal, Output, Ssh(usize) }
+enum Bottom { Terminal(usize), Output, Ssh(usize, usize), Repl, SshNone }
 
 #[derive(PartialEq, Clone, Copy)]
-enum SideTab { Files, Ssh, Vpn, Web, Libs }
+enum SideTab { Files, Ssh, Vpn }
 
 #[derive(PartialEq, Clone, Copy)]
 enum Mode { Plain, PyConsole, Debug, Remote }
 
 #[derive(Clone, Copy, PartialEq)]
-enum OutKind { Normal, Error, Info, Echo }
+enum OutKind { Normal, Error, Info, Echo, Warn, Debug }
 
 enum Dialog {
     NewFile(PathBuf, String),
@@ -162,6 +196,7 @@ enum Dialog {
     CloseUnsaved(u64),
     Quit,
     Args(String),
+    Goto(String),
     Password { lab: Lab, pw: String, save: bool, why: String },
     LabEdit { index: Option<usize>, lab: Lab },
     RemoteName { session: usize, dir: String, name: String, dir_kind: bool },
@@ -174,12 +209,16 @@ enum Dialog {
 
 pub(crate) struct SshSession {
     conn: Conn,
-    term: Terminal,
+    /// terminaux de cette machine (le premier s'ouvre à la connexion, clic droit → « Nouveau terminal »)
+    terms: Vec<Terminal>,
     listing: HashMap<String, Vec<RemoteEntry>>,
     expanded: BTreeSet<String>,
     connected: bool,
     failed: Option<String>,
     selected: Option<String>,
+    /// dossier affiché dans l'explorateur distant (le dossier personnel au départ)
+    root: String,
+    path_edit: String,
 }
 
 pub struct App {
@@ -195,7 +234,10 @@ pub struct App {
     next_pane: usize,
     drag_tab: Option<u64>,
     explorer: Explorer,
-    term: Terminal,
+    /// terminaux locaux (le premier suit le dossier ouvert)
+    terms: Vec<Terminal>,
+    /// onglet « Interpréteur Python »
+    repl_term: Terminal,
     output: Vec<(String, OutKind)>,
     out_input: String,
     run: Option<Box<dyn Proc>>,
@@ -233,6 +275,31 @@ pub struct App {
     labs: Vec<Lab>,
     sessions: Vec<SshSession>,
     ssh_sel: usize,
+    /// sous-onglet « Nouvelle connexion » affiché dans le panneau SSH
+    ssh_new: bool,
+    /// réglages (fenêtre Paramètres)
+    pub(crate) cfg: crate::settings::Settings,
+    settings_open: bool,
+    settings_page: u8,
+    /// action dont on attend le nouveau raccourci
+    key_capture: Option<crate::settings::Action>,
+    menu_request: bool,
+    /// points d'arrêt de la session (fichiers ouverts ou non)
+    bp_store: BTreeMap<String, Vec<usize>>,
+    autosave_tab: Option<u64>,
+    autosave_focus: bool,
+    /// réglages modifiés, à enregistrer
+    pub(crate) cfg_dirty: bool,
+    /// dernière frappe (enregistrement automatique)
+    last_edit: Option<std::time::Instant>,
+    /// champ « Évaluer une expression » du débogueur
+    dbg_eval: String,
+    /// fichiers cachés visibles dans l'explorateur distant
+    ssh_hidden: bool,
+    /// champ « adresse web » de la page d'accueil
+    start_url: String,
+    /// fenêtre « Bibliothèques Python » (bouton violet de la barre d'outils)
+    libs_open: bool,
     quick: String,
     diag: Option<Receiver<String>>,
     // VPN
@@ -247,6 +314,7 @@ pub struct App {
     bookmarks: Vec<(String, String)>,
     // Bibliothèques Python
     pkgs: Vec<(String, String)>,
+    pkg_sel: Option<String>,
     pkg_rx: Option<Receiver<pip::Msg>>,
     pkg_log: String,
     pkg_name: String,
@@ -263,6 +331,8 @@ pub(crate) enum PaneOp {
     CloseOthers(u64),
     Split(u64, usize, bool),
     Move(u64, usize),
+    /// onglet glissé dans la barre : le placer avant / après un autre
+    Reorder(u64, u64, bool),
 }
 
 fn config_dir() -> Option<PathBuf> {
@@ -282,38 +352,49 @@ pub(crate) fn dunce(p: &Path) -> PathBuf {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext, arg: Option<PathBuf>) -> App {
-        theme::load_fonts(&cc.egui_ctx);
-        let sess: SessionFile = config_dir().and_then(|d| std::fs::read_to_string(d.join("session.json")).ok())
-            .and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-        let theme_name = if sess.theme.is_empty() { theme::THEMES[0].0.to_string() } else { sess.theme.clone() };
-        let font_size = if sess.font_size >= 9.0 { sess.font_size } else { 14.0 };
+        let cfg = crate::settings::Settings::load();
+        theme::load_fonts(&cc.egui_ctx, &cfg.code_font, &cfg.ui_font);
+        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        cc.egui_ctx.set_zoom_factor(cfg.ui_scale);
+        let raw_sess = config_dir().and_then(|d| std::fs::read_to_string(d.join("session.json")).ok());
+        let first_launch = raw_sess.is_none();
+        let sess: SessionFile = raw_sess.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        // premier lancement : on reprend le thème choisi dans la version Python s'il y en a un
+        let theme_name = if sess.theme.is_empty() { theme::python_theme().unwrap_or_else(|| theme::THEMES[0].0.to_string()) } else { sess.theme.clone() };
+        let font_size = if sess.font_size >= 9.0 { sess.font_size } else { 14.67 }; // 11 pt, comme la version Python
         let p = theme::palette(&theme_name);
         theme::apply(&cc.egui_ctx, &p, font_size);
         let home = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
+        crate::runner::detect_python_version(cc.egui_ctx.clone());
         let mut app = App {
             p, theme: theme_name, font_size, root: home, tabs: Vec::new(), layout: Layout::Leaf(0),
             pane_active: HashMap::new(), focus_pane: 0, next_uid: 1, next_pane: 1, drag_tab: None,
-            explorer: Explorer::new(), term: Terminal::new(), output: Vec::new(), out_input: String::new(),
+            explorer: Explorer::new(), terms: vec![Terminal::new()], repl_term: Terminal::new_repl(), output: Vec::new(), out_input: String::new(),
             run: None, mode: Mode::Plain, repl: false, dbg: None, frames: Vec::new(), frame_idx: 0,
             locals: Vec::new(), globals: Vec::new(), children: HashMap::new(), pending_children: HashMap::new(),
             dbg_line: None, error_line: None, module: pyscripter::module_dir(), pdf_module: crate::pdf::module_lib().is_some(),
-            bottom: if sess.output_tab { Bottom::Output } else { Bottom::Terminal },
-            side: match sess.side { 1 => SideTab::Ssh, 2 => SideTab::Vpn, 3 => SideTab::Web, 4 => SideTab::Libs, _ => SideTab::Files },
+            bottom: if sess.output_tab { Bottom::Output } else { Bottom::Terminal(0) },
+            side: match sess.side { 1 => SideTab::Ssh, 2 => SideTab::Vpn, _ => SideTab::Files },
             show_explorer: !sess.hide_explorer, show_bottom: !sess.hide_bottom, find_open: false,
             find_text: String::new(), replace_text: String::new(), find_info: String::new(), dialog: None,
             status: None, recent: sess.recent.clone(), run_args: sess.run_args.clone(), allow_quit: false,
             title: String::new(), new_count: 0, ctx: cc.egui_ctx.clone(), logo: None,
-            labs: ssh::load_labs(), sessions: Vec::new(), ssh_sel: 0, quick: String::new(), diag: None,
+            labs: ssh::load_labs(), sessions: Vec::new(), ssh_sel: 0, ssh_new: false, cfg, settings_open: false, settings_page: 0, key_capture: None, menu_request: false, bp_store: BTreeMap::new(), autosave_tab: None, autosave_focus: true, cfg_dirty: false, last_edit: None, dbg_eval: String::new(), ssh_hidden: false, start_url: String::new(), libs_open: false, quick: String::new(), diag: None,
             vpns: Vec::new(), vpn_sel: None, vpn_list: None, vpn_job: None, vpn_status: String::new(),
             vpn_creds: HashMap::new(), vpn_refreshed: None,
-            bookmarks: if sess.bookmarks.is_empty() { vec![("Cours URCA".into(), URCA.into())] } else { sess.bookmarks.clone() },
-            pkgs: Vec::new(), pkg_rx: None, pkg_log: String::new(), pkg_name: String::new(), pkg_filter: String::new(),
+            bookmarks: if sess.bookmarks.is_empty() { default_bookmarks() } else { sess.bookmarks.clone() },
+            pkgs: Vec::new(), pkg_sel: None, pkg_rx: None, pkg_log: String::new(), pkg_name: String::new(), pkg_filter: String::new(),
             pkg_busy: false, pkg_loaded: false, pane_ops: Vec::new(), session_sig: 0, pending_saves: HashMap::new(),
         };
-        if app.side == SideTab::Libs && app.module.is_none() { app.side = SideTab::Files; }
+        app.bp_store = sess.breakpoints.clone();
         app.explorer.expanded = sess.expanded.iter().cloned().collect();
+        // « studentcode . » dans le dossier de la dernière séance : on retrouve ses fichiers ouverts
+        let arg = match arg {
+            Some(a) if a.is_dir() && sess.root.as_ref().map(|r| same_path(&a, r)).unwrap_or(false) => None,
+            x => x,
+        };
         match arg {
-            // « studentcode dossier » : on ouvre ce dossier, sans restaurer les fichiers de la session
+            // « studentcode autre-dossier » : on ouvre ce dossier, sans restaurer les fichiers de la session
             Some(a) if a.is_dir() => app.set_root(dunce(&a)),
             Some(a) => {
                 let a = dunce(&a);
@@ -351,6 +432,8 @@ impl App {
                 app.cleanup_panes();
             }
         }
+        // tout premier lancement : le fichier d'exemple, comme la version Python
+        if first_launch && app.tabs.is_empty() { app.new_doc_with(DEMO); }
         for t in app.tabs.iter_mut() {
             if let Content::Doc(d) = &mut t.c {
                 if let Some(b) = d.path.as_ref().and_then(|p| sess.breakpoints.get(&p.to_string_lossy().to_string())) {
@@ -364,14 +447,16 @@ impl App {
     fn save_session(&self) {
         let Some(dir) = config_dir() else { return };
         let _ = std::fs::create_dir_all(&dir);
-        let mut bps = BTreeMap::new();
+        let mut bps = self.bp_store.clone();
         for t in &self.tabs {
             if let Some(d) = t.doc() {
-                if let (Some(p), false) = (&d.path, d.breakpoints.is_empty()) {
-                    bps.insert(p.to_string_lossy().to_string(), d.breakpoints.iter().copied().collect());
+                if let Some(p) = &d.path {
+                    let k = p.to_string_lossy().to_string();
+                    if d.breakpoints.is_empty() { bps.remove(&k); } else { bps.insert(k, d.breakpoints.iter().copied().collect()); }
                 }
             }
         }
+        bps.retain(|k, _| Path::new(k).exists());
         let s = SessionFile {
             root: Some(self.root.clone()),
             files: self.tabs.iter().filter_map(|t| t.path().map(|p| (p.to_path_buf(), t.pane))).collect(),
@@ -390,7 +475,7 @@ impl App {
             breakpoints: bps,
             run_args: self.run_args.clone(),
             bookmarks: self.bookmarks.clone(),
-            side: match self.side { SideTab::Files => 0, SideTab::Ssh => 1, SideTab::Vpn => 2, SideTab::Web => 3, SideTab::Libs => 4 },
+            side: match self.side { SideTab::Files => 0, SideTab::Ssh => 1, SideTab::Vpn => 2 },
         };
         if let Ok(j) = serde_json::to_string_pretty(&s) {
             let _ = std::fs::write(dir.join("session.json"), j);
@@ -428,7 +513,7 @@ impl App {
         self.recent.insert(0, dir.clone());
         self.recent.truncate(8);
         self.explorer.refresh();
-        self.term.cd(&dir); // le terminal suit le dossier ouvert
+        self.terms[0].cd(&dir); // le terminal suit le dossier ouvert
     }
 
     fn open_folder_dialog(&mut self) {
@@ -499,7 +584,11 @@ impl App {
             }
         } else {
             match Doc::open(path) {
-                Ok(d) => Content::Doc(d),
+                Ok(mut d) => {
+                    // points d'arrêt gardés d'une fois sur l'autre, même pour un fichier rouvert plus tard
+                    if let Some(b) = self.bp_store.get(&path.to_string_lossy().to_string()) { d.breakpoints = b.iter().copied().collect(); }
+                    Content::Doc(d)
+                }
                 Err(e) => {
                     if e == "fichier binaire" {
                         let _ = open::that_detached(path);
@@ -514,12 +603,18 @@ impl App {
     }
 
     fn new_doc(&mut self) {
+        self.new_doc_with("");
+    }
+
+    fn new_doc_with(&mut self, text: &str) {
         self.new_count += 1;
-        self.add_tab(Content::Doc(Doc::new_empty(self.new_count)));
+        self.add_tab(Content::Doc(Doc::untitled(self.new_count, text)));
     }
 
     fn save_tab(&mut self, i: usize) -> bool {
+        let trim = self.cfg.trim_on_save;
         let Some(d) = self.tabs[i].doc_mut() else { return true };
+        if trim { d.trim_trailing(); }
         if let Some((key, path, _)) = d.remote.clone() {
             let data = d.text.clone().into_bytes();
             match self.sessions.iter().find(|s| s.conn.lab.key() == key && s.connected) {
@@ -545,6 +640,41 @@ impl App {
         self.report_save(r)
     }
 
+    fn clear_output_for_run(&mut self) {
+        if self.cfg.clear_output || self.output.is_empty() {
+            self.output.clear();
+        } else if !self.output.last().map(|(t, _)| t.ends_with("\n\n")).unwrap_or(true) {
+            self.out("\n", OutKind::Normal);
+        }
+    }
+
+    /// Enregistrement automatique (Paramètres → Éditeur) : en quittant l'onglet ou la fenêtre, ou une
+    /// seconde après la dernière frappe. Seulement les fichiers qui ont déjà un nom.
+    fn autosave_files(&mut self, ctx: &egui::Context) {
+        let mode = self.cfg.autosave;
+        if mode == 0 { return; }
+        let cur = self.cur().map(|i| self.tabs[i].uid);
+        let focused = ctx.input(|i| i.focused);
+        let now = match mode {
+            1 => {
+                let changed = cur != self.autosave_tab || (self.autosave_focus && !focused);
+                self.autosave_tab = cur;
+                self.autosave_focus = focused;
+                changed
+            }
+            _ => match self.last_edit {
+                Some(t) if t.elapsed() >= Duration::from_secs(1) => { self.last_edit = None; true }
+                Some(t) => { ctx.request_repaint_after(Duration::from_secs(1).saturating_sub(t.elapsed())); false }
+                None => false,
+            },
+        };
+        if !now { return; }
+        for k in 0..self.tabs.len() {
+            let ok = self.tabs[k].doc().map(|d| d.dirty() && d.untitled == 0 && (d.path.is_some() || d.remote.is_some())).unwrap_or(false);
+            if ok { self.save_tab(k); }
+        }
+    }
+
     fn report_save(&mut self, r: Result<(), String>) -> bool {
         match r {
             Ok(()) => { self.explorer.refresh(); true }
@@ -560,6 +690,12 @@ impl App {
         }
         if let Content::Pdf(p) = &self.tabs[i].c { p.save_position(); }
         let t = self.tabs.remove(i);
+        if let Some(d) = t.doc() {
+            if let Some(p) = &d.path {
+                let k = p.to_string_lossy().to_string();
+                if d.breakpoints.is_empty() { self.bp_store.remove(&k); } else { self.bp_store.insert(k, d.breakpoints.iter().copied().collect()); }
+            }
+        }
         if self.pane_active.get(&t.pane) == Some(&t.uid) {
             // l'onglet voisin du même volet devient visible
             if let Some(n) = self.tabs.iter().rev().find(|x| x.pane == t.pane) {
@@ -657,8 +793,10 @@ impl App {
             self.say("Ouvre d'abord un fichier de code à exécuter.", self.p.yellow);
             return;
         };
-        // enregistrer avant d'exécuter, comme les autres IDE
+        // enregistrer avant d'exécuter, comme les autres IDE (le fichier exécuté toujours, les autres
+        // selon les Paramètres)
         for k in 0..self.tabs.len() {
+            if k != i && !self.cfg.save_before_run { continue; }
             let save = self.tabs[k].doc().map(|d| d.dirty() && (d.path.is_some() || d.remote.is_some())).unwrap_or(false);
             if save { self.save_tab(k); }
         }
@@ -677,10 +815,10 @@ impl App {
                 self.say("Je ne sais pas exécuter ce type de fichier.", self.p.yellow);
                 return;
             };
-            self.output.clear();
+            self.clear_output_for_run();
             self.show_bottom = true;
             self.bottom = Bottom::Output;
-            self.out(&format!("▶ {} sur {label}\n", rpath), OutKind::Info);
+            self.out(&format!("── Exécution : {} ({label}) ──\n", rpath.rsplit('/').next().unwrap_or(&rpath)), OutKind::Info);
             self.run = Some(Box::new(ssh::RemoteRun::start(lab, pw, line, self.ctx.clone())));
             self.mode = Mode::Remote;
             return;
@@ -691,7 +829,7 @@ impl App {
         let path = self.tabs[i].doc().and_then(|d| d.path.clone()).unwrap();
         let folder = path.parent().unwrap_or(Path::new(".")).to_path_buf();
         let is_py = path.extension().map(|e| e == "py" || e == "pyw").unwrap_or(false);
-        self.output.clear();
+        self.clear_output_for_run();
         self.error_line = None;
         self.repl = false;
         self.show_bottom = true;
@@ -737,7 +875,8 @@ impl App {
             self.mode = Mode::Plain;
         }
         let label = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        self.out(&format!("▶ {}{label}\n", if debug { "Débogage de " } else { "" }), OutKind::Info);
+        // mêmes messages que la version Python
+        self.out(&format!("── {} : {label} ──\n", if debug { "Débogage" } else { "Exécution" }), OutKind::Info);
         match runner::spawn(cmd) {
             Ok(r) => self.run = Some(Box::new(r)),
             Err(e) => { self.out(&format!("Lancement impossible : {e}\n"), OutKind::Error); self.dbg = None; }
@@ -787,7 +926,8 @@ impl App {
                         self.out(before, OutKind::Normal);
                         let rest = &rest[END_MARK.len()..];
                         let (code, after) = rest.split_once('\x1e').unwrap_or((rest, ""));
-                        self.out(&format!("\n— Programme terminé (code {code}) · console Python ouverte sur ses variables —\n"), OutKind::Info);
+                        self.out(&format!("\n── Programme terminé (code {code}) · interpréteur actif : les variables, fonctions et classes du programme sont disponibles ──\n"),
+                                 if code.trim() == "0" { OutKind::Info } else { OutKind::Warn });
                         self.repl = true;
                         self.dbg = None;
                         self.frames.clear();
@@ -801,13 +941,15 @@ impl App {
             }
         }
         if let Some(code) = exit {
-            let msg = match code {
-                Some(0) => "\n— Terminé —\n".to_string(),
-                Some(c) => format!("\n— Terminé avec le code {c} —\n"),
-                None => "\n— Arrêté —\n".to_string(),
+            let (msg, kind) = match code {
+                Some(0) => ("\n── Programme terminé (code 0) ──\n".to_string(), OutKind::Info),
+                Some(c) => (format!("\n── Programme terminé (code {c}) ──\n"), OutKind::Warn),
+                None => ("\n── Programme arrêté ──\n".to_string(), OutKind::Warn),
             };
-            if !self.repl {
-                self.out(&msg, OutKind::Info);
+            if self.repl {
+                self.out("\n── Interpréteur fermé ──\n", OutKind::Info);
+            } else {
+                self.out(&msg, kind);
             }
             self.repl = false;
             self.dbg = None;
@@ -883,19 +1025,14 @@ impl App {
     }
 
     fn send_input(&mut self) {
+        // comme la version Python : la ligne va au programme (l'évaluation au point d'arrêt
+        // se fait dans le champ du panneau de débogage)
         let line = std::mem::take(&mut self.out_input);
-        if let Some(s) = self.dbg.as_mut().filter(|_| !self.frames.is_empty()) {
-            // en pause dans le débogueur : la ligne est évaluée dans le contexte courant
-            self.output.push((format!("» {line}\n"), OutKind::Echo));
-            s.eval(self.frame_idx, &line);
-            if let Some(s) = self.dbg.as_mut() { s.request_vars(self.frame_idx); }
-            return;
-        }
         if let Some(r) = self.run.as_mut().filter(|r| !r.finished()) {
             r.write(&format!("{line}\n"));
             self.out(&format!("{line}\n"), OutKind::Echo);
         } else {
-            self.say("Aucun programme en cours : lance-le avec F5.", self.p.yellow);
+            self.say("Lance d'abord le programme (F5) : tu pourras ensuite taper du Python ici.", self.p.yellow);
         }
     }
 
@@ -911,9 +1048,9 @@ impl App {
             }
             Action::Delete(p) => self.dialog = Some(Dialog::Delete(p)),
             Action::Terminal(d) => {
-                self.term.cd(&d);
+                self.terms[0].cd(&d);
                 self.show_bottom = true;
-                self.bottom = Bottom::Terminal;
+                self.bottom = Bottom::Terminal(0);
             }
             Action::Upload(p) => {
                 match self.sessions.get(self.ssh_sel).filter(|s| s.connected) {
@@ -958,11 +1095,69 @@ impl App {
         }
     }
 
+    // ------------------------------------------------------------------ terminaux
+    /// Le terminal affiché en bas (s'il y en a un).
+    fn shown_term(&self) -> Option<&Terminal> {
+        match self.bottom {
+            Bottom::Terminal(n) => self.terms.get(n),
+            Bottom::Ssh(i, n) => self.sessions.get(i).and_then(|s| s.terms.get(n)),
+            Bottom::Repl => Some(&self.repl_term),
+            Bottom::Output | Bottom::SshNone => None,
+        }
+    }
+
+    /// Nouveau terminal local (dans `dir`, sinon le dossier ouvert).
+    fn new_local_terminal(&mut self, dir: Option<PathBuf>) {
+        let mut t = Terminal::new();
+        t.cd(dir.as_deref().unwrap_or(&self.root));
+        self.terms.push(t);
+        self.bottom = Bottom::Terminal(self.terms.len() - 1);
+        self.show_bottom = true;
+    }
+
+    /// Nouveau terminal sur la machine `i` (dans `dir`, sinon le dossier personnel).
+    fn new_ssh_terminal(&mut self, i: usize, dir: Option<String>) {
+        let Some(s) = self.sessions.get_mut(i) else { return };
+        let t = Terminal::new_ssh(s.conn.lab.clone(), s.conn.password.clone(), dir);
+        s.terms.push(t);
+        self.bottom = Bottom::Ssh(i, s.terms.len() - 1);
+        self.show_bottom = true;
+    }
+
+    /// « Nouveau terminal » depuis un onglet : même machine que l'onglet.
+    fn new_terminal_like(&mut self, b: Bottom) {
+        match b {
+            Bottom::Ssh(i, _) if self.sessions.get(i).map(|s| s.connected).unwrap_or(false) => self.new_ssh_terminal(i, None),
+            _ => self.new_local_terminal(None),
+        }
+    }
+
+    /// Ferme un terminal ouvert en plus (le premier de chaque machine reste).
+    fn close_terminal(&mut self, b: Bottom) {
+        match b {
+            Bottom::Terminal(n) if n > 0 && n < self.terms.len() => {
+                let mut t = self.terms.remove(n);
+                t.kill();
+                if let Bottom::Terminal(k) = self.bottom { if k >= n { self.bottom = Bottom::Terminal(k.saturating_sub(1).min(self.terms.len() - 1)); } }
+            }
+            Bottom::Ssh(i, n) if n > 0 => {
+                let Some(s) = self.sessions.get_mut(i) else { return };
+                if n >= s.terms.len() { return; }
+                let mut t = s.terms.remove(n);
+                t.kill();
+                let len = s.terms.len();
+                if let Bottom::Ssh(k, m) = self.bottom { if k == i && m >= n { self.bottom = Bottom::Ssh(i, m.saturating_sub(1).min(len - 1)); } }
+            }
+            _ => {}
+        }
+    }
+
     // ------------------------------------------------------------------ SSH
     pub(crate) fn connect_lab(&mut self, lab: Lab, password: Option<String>) {
         if let Some(i) = self.sessions.iter().position(|s| s.conn.lab.key() == lab.key()) {
             if self.sessions[i].connected || self.sessions[i].failed.is_none() {
                 self.ssh_sel = i;
+                self.ssh_new = false;
                 self.side = SideTab::Ssh;
                 return;
             }
@@ -989,10 +1184,11 @@ impl App {
         match pw {
             Some(pw) => {
                 let conn = Conn::open(lab.clone(), pw.clone(), self.ctx.clone());
-                let term = Terminal::new_ssh(lab, pw);
-                self.sessions.push(SshSession { conn, term, listing: HashMap::new(), expanded: BTreeSet::new(),
-                    connected: false, failed: None, selected: None });
+                let term = Terminal::new_ssh(lab, pw, None);
+                self.sessions.push(SshSession { conn, terms: vec![term], listing: HashMap::new(), expanded: BTreeSet::new(),
+                    connected: false, failed: None, selected: None, root: String::new(), path_edit: String::new() });
                 self.ssh_sel = self.sessions.len() - 1;
+                self.ssh_new = false;
                 self.side = SideTab::Ssh;
             }
             None => {
@@ -1005,9 +1201,10 @@ impl App {
     pub(crate) fn disconnect(&mut self, i: usize) {
         if i >= self.sessions.len() { return; }
         let mut s = self.sessions.remove(i);
-        s.term.kill();
-        if self.bottom == Bottom::Ssh(i) { self.bottom = Bottom::Terminal; }
-        if let Bottom::Ssh(k) = self.bottom { if k > i { self.bottom = Bottom::Ssh(k - 1); } }
+        for t in s.terms.iter_mut() { t.kill(); }
+        if let Bottom::Ssh(k, n) = self.bottom {
+            if k == i { self.bottom = Bottom::Terminal(0); } else if k > i { self.bottom = Bottom::Ssh(k - 1, n); }
+        }
         self.ssh_sel = self.ssh_sel.min(self.sessions.len().saturating_sub(1));
     }
 
@@ -1028,7 +1225,8 @@ impl App {
                     s.connected = true;
                     s.conn.home = Some(home.clone());
                     s.expanded.insert(home.clone());
-                    s.conn.send(Req::List(home));
+                    if s.root.is_empty() { s.root = home.clone(); s.path_edit = home.clone(); }
+                    s.conn.send(Req::List(s.root.clone()));
                     if lab.save_password { crate::secrets::set(&lab.key(), &s.conn.password); }
                     let msg = if cleaned.is_empty() { format!("Connecté à {}.", lab.label()) }
                               else { format!("Connecté à {} · {} processus d'une séance précédente arrêté(s).", lab.label(), cleaned.len()) };
@@ -1229,66 +1427,100 @@ impl App {
     }
 
     // ------------------------------------------------------------------ raccourcis
+    /// Raccourcis : ceux de la fenêtre Paramètres (comparés exactement : Ctrl+S ne déclenche pas
+    /// Ctrl+Maj+S). Quand un terminal a le clavier, seules quelques actions restent à l'app.
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        let k = |m: Modifiers, key: Key| ctx.input_mut(|i| i.consume_key(m, key));
-        // dans un terminal, les touches Ctrl+lettre appartiennent au shell (Ctrl+W, Ctrl+R…) :
-        // seuls F5 / F6 / Maj+F5 et Ctrl+` restent à l'app
-        let in_term = self.term.focused && self.bottom == Bottom::Terminal
-            || matches!(self.bottom, Bottom::Ssh(i) if self.sessions.get(i).map(|s| s.term.focused).unwrap_or(false));
-        if in_term && self.show_bottom {
-            if k(Modifiers::COMMAND, Key::Backtick) { self.show_bottom = false; }
-            if k(Modifiers::COMMAND, Key::S) { if let Some(i) = self.cur() { self.save_tab(i); } }
-            if k(Modifiers::SHIFT, Key::F5) { self.stop(); }
-            if k(Modifiers::NONE, Key::F5) { self.start(false); }
-            if k(Modifiers::NONE, Key::F6) { self.start(true); }
-            return;
+        if self.key_capture.is_some() { return; } // la fenêtre Paramètres attend une touche
+        let in_term = self.shown_term().map(|t| t.focused).unwrap_or(false) && self.show_bottom;
+        let mut todo = Vec::new();
+        for a in crate::settings::ACTIONS {
+            if in_term && !a.works_in_terminal() { continue; }
+            for sc in self.cfg.shortcuts(*a) {
+                if crate::settings::pressed(ctx, &sc) { todo.push(*a); break; }
+            }
         }
-        if k(Modifiers::COMMAND, Key::S) {
-            if let Some(i) = self.cur() { self.save_tab(i); }
-        }
-        if k(Modifiers::COMMAND | Modifiers::SHIFT, Key::S) {
-            for i in 0..self.tabs.len() { if self.tabs[i].dirty() { self.save_tab(i); } }
-        }
-        if k(Modifiers::COMMAND, Key::O) { self.open_folder_dialog(); }
-        if k(Modifiers::COMMAND, Key::N) { self.new_doc(); }
-        if k(Modifiers::COMMAND, Key::W) {
-            if let Some(i) = self.cur() { self.close_tab(i, false); }
-        }
-        if k(Modifiers::COMMAND, Key::F) {
-            self.find_open = true;
-            ctx.memory_mut(|m| m.request_focus(egui::Id::new("find")));
-        }
-        if self.find_open && k(Modifiers::NONE, Key::Escape) {
+        for a in todo { self.run_action(a, ctx); }
+        if self.find_open && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
             self.find_open = false;
             if let Some(d) = self.cur_doc() { d.find = None; d.focus(ctx); }
         }
-        if k(Modifiers::COMMAND, Key::B) { self.show_explorer = !self.show_explorer; }
-        if k(Modifiers::COMMAND, Key::J) || k(Modifiers::COMMAND, Key::Backtick) { self.show_bottom = !self.show_bottom; }
-        if k(Modifiers::COMMAND, Key::Backslash) {
-            if let Some(i) = self.cur() { let (u, p) = (self.tabs[i].uid, self.tabs[i].pane); self.split_tab(u, p, false); }
+    }
+
+    /// Exécute une action (raccourci, menu ou barre d'outils).
+    pub(crate) fn run_action(&mut self, a: crate::settings::Action, ctx: &egui::Context) {
+        use crate::settings::Action as A;
+        let stopped = self.dbg.is_some() && !self.frames.is_empty();
+        match a {
+            A::New => self.new_doc(),
+            A::OpenFile => { if let Some(f) = rfd::FileDialog::new().set_directory(&self.root).pick_file() { self.open_file(&f); } }
+            A::OpenFolder => self.open_folder_dialog(),
+            A::Save => { if let Some(i) = self.cur() { self.save_tab(i); } }
+            A::SaveAs => self.save_as(),
+            A::SaveAll => { for i in 0..self.tabs.len() { if self.tabs[i].dirty() { self.save_tab(i); } } }
+            A::CloseTab => { if let Some(i) = self.cur() { self.close_tab(i, false); } }
+            A::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            A::Find => {
+                let pdf = self.cur().and_then(|i| if let Content::Pdf(v) = &mut self.tabs[i].c { Some(v) } else { None });
+                if let Some(v) = pdf { v.open_search(ctx); } else if self.cur().is_some() {
+                    self.find_open = true;
+                    ctx.memory_mut(|m| m.request_focus(egui::Id::new("find")));
+                }
+            }
+            A::Goto => { if self.cur_doc().is_some() { self.dialog = Some(Dialog::Goto(String::new())); } }
+            A::Comment => { if let Some(d) = self.cur_doc() { d.pending_comment = true; } }
+            A::DuplicateLine => { if let Some(d) = self.cur_doc() { d.pending_duplicate = true; } }
+            A::Run => self.start(false),
+            A::Debug => { if stopped { self.dbg_cmd("continue"); } else { self.start(true); } }
+            A::Stop => self.stop(),
+            A::StepOver => { if stopped { self.dbg_cmd("next"); } }
+            A::StepInto => { if stopped { self.dbg_cmd("step"); } }
+            A::StepOut => { if stopped { self.dbg_cmd("return"); } }
+            A::Breakpoint => self.toggle_bp_here(),
+            A::ToggleSide => self.show_explorer = !self.show_explorer,
+            A::ToggleBottom => self.show_bottom = !self.show_bottom,
+            A::Terminal => { self.show_bottom = true; self.bottom = Bottom::Terminal(0); }
+            A::NewTerminal => self.new_terminal_like(self.bottom),
+            A::SplitRight => {
+                if let Some(i) = self.cur() { let (u, p) = (self.tabs[i].uid, self.tabs[i].pane); self.split_tab(u, p, false); }
+            }
+            A::NextTab | A::PrevTab => {
+                let pane = self.focus_pane;
+                let ids: Vec<usize> = (0..self.tabs.len()).filter(|i| self.tabs[*i].pane == pane).collect();
+                if !ids.is_empty() {
+                    let cur = self.cur().and_then(|c| ids.iter().position(|x| *x == c)).unwrap_or(0);
+                    let n = ids.len();
+                    self.activate(ids[if a == A::NextTab { (cur + 1) % n } else { (cur + n - 1) % n }]);
+                }
+            }
+            A::ZoomIn => self.zoom(1.0, ctx),
+            A::ZoomOut => self.zoom(-1.0, ctx),
+            A::ZoomReset => { self.font_size = 14.67; }
+            A::Libs => {
+                if self.module.is_some() {
+                    self.libs_open = !self.libs_open;
+                    if self.libs_open && !self.pkg_loaded { self.pip_list(); }
+                }
+            }
+            A::Ssh => { self.show_explorer = true; self.side = SideTab::Ssh; }
+            A::Vpn => { self.show_explorer = true; self.side = SideTab::Vpn; self.refresh_vpns(); }
+            A::Settings => self.settings_open = !self.settings_open,
+            A::Menu => self.menu_request = true,
         }
-        if k(Modifiers::COMMAND, Key::Tab) {
-            let pane = self.focus_pane;
-            let ids: Vec<usize> = (0..self.tabs.len()).filter(|i| self.tabs[*i].pane == pane).collect();
-            if !ids.is_empty() {
-                let cur = self.cur().and_then(|c| ids.iter().position(|x| *x == c)).unwrap_or(0);
-                self.activate(ids[(cur + 1) % ids.len()]);
+    }
+
+    fn save_as(&mut self) {
+        if let Some(i) = self.cur() {
+            if self.tabs[i].doc().is_none() { return; }
+            if let Some(f) = rfd::FileDialog::new().set_directory(&self.root).save_file() {
+                if let Some(d) = self.tabs[i].doc_mut() { d.remote = None; d.untitled = 0; let r = d.save_as(f); self.report_save(r); }
             }
         }
-        if k(Modifiers::COMMAND, Key::Plus) || k(Modifiers::COMMAND, Key::Equals) { self.zoom(1.0, ctx); }
-        if k(Modifiers::COMMAND, Key::Minus) { self.zoom(-1.0, ctx); }
-        if k(Modifiers::SHIFT, Key::F5) { self.stop(); }
-        if k(Modifiers::NONE, Key::F5) { self.start(false); }
-        if k(Modifiers::NONE, Key::F6) { self.start(true); }
-        if self.dbg.is_some() && !self.frames.is_empty() {
-            if k(Modifiers::NONE, Key::F10) { self.dbg_cmd("next"); }
-            if k(Modifiers::SHIFT, Key::F11) { self.dbg_cmd("return"); }
-            if k(Modifiers::NONE, Key::F11) { self.dbg_cmd("step"); }
-        }
-        if k(Modifiers::NONE, Key::F9) {
-            if let Some(i) = self.cur() {
-                if let Some(line) = self.tabs[i].doc().map(|d| d.cursor_line) { self.toggle_breakpoint(i, line); }
-            }
+    }
+
+    /// Point d'arrêt sur la ligne du curseur (F9 ou bouton rouge).
+    fn toggle_bp_here(&mut self) {
+        if let Some(i) = self.cur() {
+            if let Some(line) = self.tabs[i].doc().map(|d| d.cursor_line) { self.toggle_breakpoint(i, line); }
         }
     }
 
@@ -1345,10 +1577,10 @@ impl eframe::App for App {
         let title = match self.cur() {
             Some(i) => {
                 let t = &self.tabs[i];
-                let remote = t.doc().and_then(|d| d.remote.as_ref()).map(|(_, _, l)| format!(" — {l}")).unwrap_or_default();
-                format!("{}{}{remote} — StudentCode", if t.dirty() { "* " } else { "" }, t.title())
+                let name = if t.doc().map(|d| d.untitled > 0).unwrap_or(false) { "sans titre".to_string() } else { t.title() };
+                format!("{}{name} — StudentCode", if t.dirty() { "* " } else { "" })
             }
-            None => "StudentCode".into(),
+            None => "Accueil — StudentCode".into(),
         };
         if title != self.title {
             self.title = title.clone();
@@ -1363,28 +1595,48 @@ impl eframe::App for App {
         }
         let p = self.p;
         self.top_bar(ui, &ctx);
-        self.status_bar(ui);
+        if self.cfg.show_statusbar { self.status_bar(ui); }
+        // panneaux à la place choisie (Paramètres ou clic droit sur leurs onglets) ; 3 px de fond sombre
+        // du côté de l'éditeur, comme la version Python
+        let side_margin = |toward_right: bool| egui::Margin { left: if toward_right { 0 } else { 3 }, right: if toward_right { 3 } else { 0 }, top: 0, bottom: 0 };
         if self.show_explorer {
-            egui::Panel::left("side").resizable(true).default_size(250.0).size_range(160.0..=560.0)
-                .frame(egui::Frame::new().fill(p.bg_dark).inner_margin(egui::Margin::symmetric(4, 4)))
-                .show(ui, |ui| self.side_panel(ui));
+            let fr = egui::Frame::new().fill(p.bg_dark).inner_margin(side_margin(!self.cfg.side_right));
+            let panel = if self.cfg.side_right { egui::Panel::right("side") } else { egui::Panel::left("side") };
+            panel.resizable(true).default_size(262.0).size_range(215.0..=560.0).show_separator_line(false)
+                .frame(fr).show(ui, |ui| self.side_panel(ui));
         }
         if self.debugging() {
-            egui::Panel::right("debug").resizable(true).default_size(300.0).size_range(200.0..=600.0)
-                .frame(egui::Frame::new().fill(p.bg_dark).inner_margin(egui::Margin::same(6)))
-                .show(ui, |ui| self.debug_panel(ui));
+            let fr = egui::Frame::new().fill(p.bg_dark).inner_margin(side_margin(self.cfg.debug_left));
+            let panel = if self.cfg.debug_left { egui::Panel::left("debug") } else { egui::Panel::right("debug") };
+            panel.resizable(true).default_size(380.0).size_range(220.0..=700.0).show_separator_line(false)
+                .frame(fr).show(ui, |ui| self.debug_panel(ui));
         }
         if self.show_bottom {
-            egui::Panel::bottom("bottom").resizable(true).default_size(230.0).size_range(90.0..=800.0)
-                .frame(egui::Frame::new().fill(p.bg_dark).inner_margin(egui::Margin::symmetric(4, 2)))
-                .show(ui, |ui| self.bottom_panel(ui));
+            if self.cfg.bottom_right {
+                egui::Panel::right("bottom_r").resizable(true).default_size(460.0).size_range(240.0..=1200.0)
+                    .show_separator_line(false)
+                    .frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin { left: 3, right: 0, top: 0, bottom: 0 }))
+                    .show(ui, |ui| self.bottom_panel(ui));
+            } else {
+                egui::Panel::bottom("bottom").resizable(true).default_size(212.0).size_range(90.0..=800.0)
+                    .show_separator_line(false)
+                    .frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin { left: 0, right: 0, top: 3, bottom: 0 }))
+                    .show(ui, |ui| self.bottom_panel(ui));
+            }
         }
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg)).show(ui, |ui| {
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg_dark)).show(ui, |ui| {
             if self.tabs.is_empty() {
                 self.start_page(ui);
             } else {
-                if self.find_open { self.find_bar(ui); }
-                let rect = ui.available_rect_before_wrap();
+                // la barre de recherche est sous les volets, comme dans la version Python
+                let mut rect = ui.available_rect_before_wrap();
+                if self.find_open {
+                    let bar = egui::Rect::from_min_max(egui::pos2(rect.min.x, rect.max.y - 36.0), rect.max);
+                    rect.max.y -= 36.0;
+                    ui.painter().rect_filled(bar, 0.0, p.bg_dark);
+                    let mut bu = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(Vec2::new(0.0, 4.0))));
+                    self.find_bar(&mut bu);
+                }
                 let layout = self.layout.clone();
                 let new_layout = self.layout_ui(ui, &layout, rect);
                 self.layout = new_layout;
@@ -1392,8 +1644,22 @@ impl eframe::App for App {
                 ui.allocate_rect(rect, egui::Sense::hover());
             }
         });
+        if self.libs_open {
+            let mut open = true;
+            egui::Window::new("Bibliothèques Python").open(&mut open).default_size([720.0, 560.0]).collapsible(false)
+                .pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center())
+                .frame(egui::Frame::window(&ctx.global_style()).fill(p.bg_dark).inner_margin(egui::Margin::same(10)))
+                .show(&ctx, |ui| self.libs_panel(ui));
+            self.libs_open = open;
+        }
+        self.settings_window(&ctx);
         self.dialogs(&ctx);
         if ctx.input(|i| i.pointer.any_released()) { self.drag_tab = None; }
+        if self.cfg_dirty && !ctx.input(|i| i.pointer.any_down()) {
+            self.cfg.save();
+            self.cfg_dirty = false;
+        }
+        self.autosave_files(&ctx);
         self.autosave_session();
     }
 
@@ -1407,8 +1673,9 @@ impl eframe::App for App {
         }
         self.save_session();
         self.stop();
-        self.term.kill();
-        for s in self.sessions.iter_mut() { s.term.kill(); }
+        for t in self.terms.iter_mut() { t.kill(); }
+        self.repl_term.kill();
+        for s in self.sessions.iter_mut() { for t in s.terms.iter_mut() { t.kill(); } }
     }
 }
 

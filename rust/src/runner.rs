@@ -53,6 +53,12 @@ pub fn which(cmd: &str) -> Option<PathBuf> {
 
 /// Commande qui lance Python sur cet ordinateur.
 pub fn python() -> Option<Vec<String>> {
+    // interpréteur choisi dans les Paramètres (« /usr/bin/python3.12 », « py -3.11 »…)
+    let chosen = crate::settings::globals().python;
+    if !chosen.is_empty() {
+        let v: Vec<String> = chosen.split_whitespace().map(String::from).collect();
+        if std::path::Path::new(&v[0]).is_file() || which(&v[0]).is_some() { return Some(v); }
+    }
     if cfg!(windows) {
         if which("py").is_some() {
             return Some(vec!["py".into(), "-3".into()]);
@@ -335,4 +341,26 @@ pub fn remote_command(path: &str, args: &[String]) -> Option<String> {
         _ => return None,
     };
     Some(line)
+}
+
+/// Version de Python (« Python 3.12.3 (venv) »), cherchée une fois en arrière-plan pour la barre d'état.
+pub static PY_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+pub fn detect_python_version(ctx: eframe::egui::Context) {
+    std::thread::spawn(move || {
+        let Some(py) = python() else { return };
+        let mut c = std::process::Command::new(&py[0]);
+        c.args(&py[1..]).args(["-c", "import sys;print(sys.version.split()[0], sys.prefix != sys.base_prefix)"]);
+        #[cfg(windows)]
+        { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }
+        if let Ok(o) = c.output() {
+            let out = String::from_utf8_lossy(&o.stdout).to_string();
+            let mut it = out.split_whitespace();
+            if let Some(v) = it.next() {
+                let venv = if it.next() == Some("True") || std::env::var_os("VIRTUAL_ENV").is_some() { " (venv)" } else { "" };
+                let _ = PY_VERSION.set(format!("Python {v}{venv}"));
+                ctx.request_repaint();
+            }
+        }
+    });
 }

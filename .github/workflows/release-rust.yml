@@ -1,5 +1,6 @@
 # Fabrique StudentCode en Rust pour Windows et Linux.
-# - étiquette « rust-v2.0.0-alpha.1 » poussée : construit, vérifie, publie (en préversion) ;
+# - étiquette « rust-v2.0.0 » poussée : construit, vérifie, publie (en préversion seulement si la
+#   version contient un « - », comme 2.1.0-beta.1) ;
 # - lancement manuel (Actions → Release Rust → Run workflow) : construit et vérifie seulement.
 name: Release Rust
 on:
@@ -117,7 +118,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls -lh out
+          VER="${GITHUB_REF_NAME#rust-v}"
+          PRE=""; case "$VER" in *-*) PRE="--prerelease" ;; esac
+          # notes : seulement la partie de cette version dans le journal
+          awk -v v="## $VER" '$0==v{on=1;next} /^## /{if(on)exit} on' rust/CHANGELOG.md > notes.md
+          [ -s notes.md ] || cp rust/CHANGELOG.md notes.md
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
-            || gh release create "$GITHUB_REF_NAME" --prerelease --title "StudentCode ${GITHUB_REF_NAME#rust-v} (Rust)" \
-                 --notes-file rust/CHANGELOG.md
+            || gh release create "$GITHUB_REF_NAME" $PRE --title "StudentCode $VER (Rust)" --notes-file notes.md
           gh release upload "$GITHUB_REF_NAME" out/* --clobber

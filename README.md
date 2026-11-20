@@ -6,12 +6,14 @@ les pages de cours et les PDF tiennent dans la même fenêtre.
 
 ![Le terminal intégré sous l'éditeur](docs/terminal.png)
 
-## Version Rust (préversion)
+## Version Rust (2.0)
 
-Une réécriture en Rust, beaucoup plus légère, est dans [`rust/`](rust/README.md) : mêmes
-fonctions (éditeur, écran partagé, terminal, SSH et labs, VPN, PDF, débogueur Python…), sans
-l'aide par IA pour l'instant, avec des modules choisis à l'installation. Elle est publiée à part
-(étiquettes `rust-v…`), en préversion.
+Une réécriture en Rust, beaucoup plus légère, est dans [`rust/`](rust/README.md) : même
+apparence et mêmes fonctions (éditeur, écran partagé, terminal, SSH et labs, VPN, PDF, débogueur
+Python…), sans l'aide par IA pour l'instant, avec des modules choisis à l'installation et une
+fenêtre **Paramètres** (Ctrl+,) où presque tout se règle : thème, polices, tailles, place des
+panneaux, boutons de la barre d'outils, raccourcis clavier, éditeur, terminal. Elle est publiée à
+part (étiquettes `rust-v…`).
 
 ## Installation
 

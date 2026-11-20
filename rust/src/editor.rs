@@ -24,6 +24,21 @@ pub struct Doc {
     pub find_next: bool,
     /// fichier d'une machine distante : (clé du lab, chemin sur la machine, nom du lab)
     pub remote: Option<(String, String, String)>,
+    /// numéro du fichier sans nom (« sans_titre_1.py »), 0 pour un vrai fichier
+    pub untitled: usize,
+    /// blocs repliés (ligne d'en-tête, à partir de 1)
+    pub folded: BTreeSet<usize>,
+    /// blocs repliables : (hash du texte, [(en-tête, dernière ligne)])
+    folds: Option<(u64, Vec<(usize, usize)>)>,
+    lines_before: usize,
+    /// « Commenter / décommenter » demandé depuis le menu ou le raccourci
+    pub pending_comment: bool,
+    /// « Dupliquer la ligne » demandé par le raccourci
+    pub pending_duplicate: bool,
+    /// recherche vers le haut (bouton ↑ de la barre de recherche)
+    pub find_back: bool,
+    /// « Remplacer » : remplace l'occurrence sélectionnée par ce texte puis passe à la suivante
+    pub replace_with: Option<String>,
 }
 
 fn hash(s: &str) -> u64 {
@@ -38,8 +53,17 @@ impl Doc {
             path: None, text: String::new(), saved_hash: hash(""), lang: Lang::Plain,
             id: egui::Id::new(("doc", n, std::time::SystemTime::now())), cache: None,
             breakpoints: BTreeSet::new(), goto: None, cursor_line: 1, cursor_col: 1, find: None, find_next: false,
-            remote: None,
+            remote: None, untitled: n, folded: BTreeSet::new(), folds: None, lines_before: 0, pending_comment: false, pending_duplicate: false, find_back: false, replace_with: None,
         }
+    }
+
+    /// Nouveau fichier Python sans nom (comme la version Python : « sans_titre_N.py »).
+    pub fn untitled(n: usize, text: &str) -> Doc {
+        let mut d = Doc::new_empty(n);
+        d.lang = Lang::Python;
+        d.text = text.to_string();
+        d.saved_hash = hash(text);
+        d
     }
 
     pub fn open(path: &Path) -> Result<Doc, String> {
@@ -52,6 +76,7 @@ impl Doc {
         }
         let text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
         let mut d = Doc::new_empty(0);
+        d.untitled = 0;
         d.id = egui::Id::new(("doc", path));
         d.saved_hash = hash(&text);
         d.text = text;
@@ -83,7 +108,16 @@ impl Doc {
             return p.rsplit('/').next().unwrap_or(p).to_string();
         }
         self.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "sans titre".into())
+            .unwrap_or_else(|| if self.untitled > 0 { format!("sans_titre_{}.py", self.untitled) } else { "sans titre".into() })
+    }
+
+    /// Enlève les espaces en fin de ligne (option des Paramètres, en enregistrant).
+    pub fn trim_trailing(&mut self) {
+        let mut out: String = self.text.split('\n').map(|l| l.trim_end_matches([' ', '\t'])).collect::<Vec<_>>().join("\n");
+        if out.len() != self.text.len() {
+            std::mem::swap(&mut out, &mut self.text);
+            self.cache = None;
+        }
     }
 
     pub fn save(&mut self) -> Result<(), String> {
@@ -116,33 +150,129 @@ impl Doc {
         }
     }
 
+    /// Largeur d'un niveau d'indentation du fichier (2 ou 4 colonnes, devinée sur ses premières lignes).
+    fn indent_unit(&self) -> usize {
+        let mut two = 0;
+        let mut four = 0;
+        for l in self.text.lines().take(400) {
+            if let Some(n) = indent_of(l) {
+                if l.starts_with('\t') { return 4; }
+                if n > 0 && n % 4 == 0 { four += 1 } else if n % 2 == 0 && n > 0 { two += 1 }
+            }
+        }
+        if two > four / 3 && two > 0 { 2 } else { 4 }
+    }
+
+    /// Blocs repliables : accolades pour les langages à accolades, indentation pour Python et YAML
+    /// (comme les lexers QScintilla de la version Python). Calculé une fois par version du texte.
+    fn fold_ranges(&mut self) -> Vec<(usize, usize)> {
+        let h = hash(&self.text);
+        if let Some((k, v)) = &self.folds { if *k == h { return v.clone(); } }
+        let mut out = Vec::new();
+        let lines: Vec<&str> = self.text.split('\n').collect();
+        match self.lang {
+            Lang::Plain | Lang::Markdown => {}
+            Lang::Python | Lang::Yaml => {
+                for i in 0..lines.len() {
+                    let Some(ind) = indent_of(lines[i]) else { continue };
+                    let mut last = i;
+                    let mut j = i + 1;
+                    while j < lines.len() {
+                        match indent_of(lines[j]) {
+                            None => {}
+                            Some(n) if n > ind => last = j,
+                            Some(_) => break,
+                        }
+                        j += 1;
+                    }
+                    if last > i { out.push((i + 1, last + 1)); }
+                }
+            }
+            _ => {
+                // accolades (hors chaînes et commentaires de fin de ligne, approximatif comme Scintilla)
+                let mut stack: Vec<usize> = Vec::new();
+                for (i, l) in lines.iter().enumerate() {
+                    let code = l.split("//").next().unwrap_or("");
+                    let mut in_str: Option<char> = None;
+                    let mut prev = ' ';
+                    for c in code.chars() {
+                        match in_str {
+                            Some(q) => { if c == q && prev != '\\' { in_str = None; } }
+                            None => match c {
+                                '"' | '\'' => in_str = Some(c),
+                                '{' => stack.push(i),
+                                '}' => { if let Some(o) = stack.pop() { if i > o { out.push((o + 1, i + 1)); } } }
+                                _ => {}
+                            },
+                        }
+                        prev = c;
+                    }
+                }
+                out.sort();
+                out.dedup_by_key(|r| r.0); // une seule flèche par ligne (le bloc le plus large)
+            }
+        }
+        self.folds = Some((h, out.clone()));
+        out
+    }
+
     pub fn ui(&mut self, ui: &mut egui::Ui, p: &Palette, font: &FontId, debug_line: Option<usize>,
-              error_line: Option<usize>, show_breakpoints: bool) -> EditorEvents {
+              error_line: Option<usize>, show_breakpoints: bool, o: &EditorOpts) -> EditorEvents {
         let mut events = EditorEvents::default();
         let (cw, row_h) = ui.fonts_mut(|f| (f.glyph_width(font, '0'), f.row_height(font)));
         let lines = self.text.matches('\n').count() + 1;
-        let digits = lines.to_string().len().max(3) as f32;
-        let gutter_w = digits * cw + 26.0;
+        // un changement du nombre de lignes déplace les blocs : on déplie tout
+        if lines != self.lines_before { self.folded.clear(); self.lines_before = lines; }
+        // marges de QScintilla dans la version Python : numéros (« 00000 »), points d'arrêt (20 px), pliage (18 px)
+        let num_w = if o.line_numbers { 5.0 * cw + 4.0 } else { 4.0 };
+        let sym_w = 20.0;
+        let fold_w = if o.folding { 18.0 } else { 0.0 };
+        let gutter_w = num_w + sym_w + fold_w;
+        if !o.folding { self.folded.clear(); }
+        let folds = if o.folding { self.fold_ranges() } else { Vec::new() };
+        let folded_ranges: Vec<(usize, usize)> = folds.iter().filter(|(h, _)| self.folded.contains(h)).copied().collect();
+        let hidden = |line: usize| folded_ranges.iter().any(|(h, e)| line > *h && line <= *e);
         let te_id = self.id.with("te");
         let focused = ui.memory(|m| m.has_focus(te_id));
-        if focused {
-            self.handle_keys(ui, te_id);
+        if focused || self.pending_comment || self.pending_duplicate {
+            self.handle_keys(ui, te_id, o);
         }
         // recherche : sélectionner l'occurrence suivante
         let mut scroll_to: Option<usize> = self.goto.take();
-        if self.find_next {
+        if self.find_next || self.find_back || self.replace_with.is_some() {
+            let back = std::mem::take(&mut self.find_back) && !self.find_next;
             self.find_next = false;
+            let repl = self.replace_with.take();
             if let Some(q) = self.find.clone().filter(|q| !q.is_empty()) {
-                let state = egui::TextEdit::load_state(ui.ctx(), te_id);
-                let from = state.as_ref().and_then(|s| s.cursor.char_range()).map(|r| r.as_sorted_char_range().end.0).unwrap_or(0);
-                let byte_from = char_to_byte(&self.text, from);
-                let lower = self.text.to_lowercase();
+                let mut state = egui::TextEdit::load_state(ui.ctx(), te_id);
                 let ql = q.to_lowercase();
-                let hit = lower.get(byte_from..).and_then(|s| s.find(&ql)).map(|x| x + byte_from)
-                    .or_else(|| lower.find(&ql));
-                if let Some(b) = hit {
+                // « Remplacer » : l'occurrence sélectionnée est remplacée
+                if let Some(r) = &repl {
+                    if let Some(range) = state.as_ref().and_then(|s| s.cursor.char_range()) {
+                        let sr = range.as_sorted_char_range();
+                        let (bs, be) = (char_to_byte(&self.text, sr.start.0), char_to_byte(&self.text, sr.end.0));
+                        if be > bs && match_ci_at(&self.text, bs, &ql.chars().collect::<Vec<_>>()) == Some(be) {
+                            self.text.replace_range(bs..be, r);
+                            let c = sr.start.0 + r.chars().count();
+                            let mut st = state.clone().unwrap_or_default();
+                            st.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(CharIndex(c)))));
+                            st.clone().store(ui.ctx(), te_id);
+                            state = Some(st);
+                            events.changed = true;
+                        }
+                    }
+                }
+                let sel = state.as_ref().and_then(|s| s.cursor.char_range()).map(|r| r.as_sorted_char_range());
+                let hit = if back {
+                    let to = sel.map(|r| char_to_byte(&self.text, r.start.0)).unwrap_or(self.text.len());
+                    find_ci(&self.text, &q, to, true)
+                } else {
+                    let from = sel.map(|r| char_to_byte(&self.text, r.end.0)).unwrap_or(0);
+                    find_ci(&self.text, &q, from, false)
+                };
+                if let Some((b, be)) = hit {
                     let s = self.text[..b].chars().count();
-                    let e = s + q.chars().count();
+                    let e = s + self.text[b..be].chars().count();
                     let mut st = state.unwrap_or_default();
                     st.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(CharIndex(s)), CCursor::new(CharIndex(e)))));
                     st.store(ui.ctx(), te_id);
@@ -153,15 +283,21 @@ impl Doc {
                 }
             }
         }
+        if let Some(l) = scroll_to {
+            // une ligne à montrer dans un bloc replié : on le déplie
+            let open: Vec<usize> = folded_ranges.iter().filter(|(h, e)| l > *h && l <= *e).map(|r| r.0).collect();
+            for h in open { self.folded.remove(&h); }
+        }
         let full = ui.available_rect_before_wrap();
         let gutter_rect = Rect::from_min_size(full.min, Vec2::new(gutter_w, full.height()));
         let text_rect = Rect::from_min_max(egui::pos2(full.min.x + gutter_w, full.min.y), full.max);
         ui.painter().rect_filled(full, 0.0, p.bg);
         let gutter_resp = ui.interact(gutter_rect, self.id.with("gutter"), Sense::click());
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_rect));
-        let mut sa = egui::ScrollArea::both().id_salt(self.id.with("scroll")).auto_shrink(false);
+        let mut sa = if o.word_wrap { egui::ScrollArea::vertical() } else { egui::ScrollArea::both() }
+            .id_salt(self.id.with("scroll")).auto_shrink(false);
         if let Some(line) = scroll_to {
-            let y = self.cache.as_ref().and_then(|c| c.3.rows.get(line.saturating_sub(1))).map(|r| r.pos.y)
+            let y = self.cache.as_ref().and_then(|c| { let st = line_starts(&c.3); st.get(line.saturating_sub(1)).and_then(|r| c.3.rows.get(*r)).map(|r| r.pos.y) })
                 .unwrap_or((line.saturating_sub(1)) as f32 * row_h);
             sa = sa.vertical_scroll_offset((y - text_rect.height() / 3.0).max(0.0));
         }
@@ -169,7 +305,18 @@ impl Doc {
         let pal = *p;
         let font_c = font.clone();
         let cache = &mut self.cache;
-        let theme_key = format!("{:?}{:?}", p.fg, p.bg);
+        let fold_key: Vec<usize> = self.folded.iter().copied().collect();
+        let wrap_w = if o.word_wrap { (text_rect.width() - 14.0).max(80.0) } else { f32::INFINITY };
+        let theme_key = format!("{:?}{:?}{:?}{}", p.fg, p.bg, fold_key, wrap_w.round());
+        let hidden_bytes: Vec<(usize, usize)> = {
+            // octets des lignes cachées : du début de la ligne après l'en-tête à la fin du bloc
+            let starts: Vec<usize> = std::iter::once(0).chain(self.text.match_indices('\n').map(|(i, _)| i + 1)).collect();
+            folded_ranges.iter().map(|(h, e)| {
+                let a = starts.get(*h).copied().unwrap_or(self.text.len());
+                let b = starts.get(*e).copied().unwrap_or(self.text.len());
+                (a, b)
+            }).collect()
+        };
         let bg_slot_holder: std::cell::Cell<Option<egui::layers::ShapeIdx>> = std::cell::Cell::new(None);
         let out = sa.show(&mut child, |ui| {
             bg_slot_holder.set(Some(ui.painter().add(Shape::Noop)));
@@ -182,7 +329,10 @@ impl Doc {
                     }
                 }
                 let mut job = highlight::highlight(text, lang, &pal, &font_c);
-                job.wrap.max_width = f32::INFINITY;
+                if !hidden_bytes.is_empty() && hidden_bytes.iter().all(|(_, b)| *b <= text.len()) {
+                    job = fold_job(job, &hidden_bytes);
+                }
+                job.wrap.max_width = wrap_w;
                 let g = ui.fonts_mut(|f| f.layout_job(job));
                 *cache = Some((h, theme_key.clone(), font_c.size, g.clone()));
                 g
@@ -192,7 +342,7 @@ impl Doc {
                 .font(font.clone())
                 .code_editor()
                 .frame(egui::Frame::NONE)
-                .margin(egui::Margin::symmetric(6, 2))
+                .margin(egui::Margin { left: 0, right: 6, top: 2, bottom: 2 })
                 .desired_width(f32::INFINITY)
                 .desired_rows((text_rect.height() / row_h) as usize)
                 .lock_focus(true)
@@ -202,16 +352,26 @@ impl Doc {
         let te = out.inner;
         let offset = out.state.clamped_offset();
         let galley_pos = te.galley_pos;
-        // ligne courante, ligne du débogueur, ligne en erreur, occurrences de la recherche
         let mut bg_shapes = Vec::new();
-        // position réelle de chaque ligne dans le texte mis en page
+        let mut fg_shapes = Vec::new();
         let galley = te.galley.clone();
+        // lignes → rangées de la mise en page (une ligne peut en avoir plusieurs avec le retour à la
+        // ligne automatique, une ligne repliée n'a presque pas de hauteur)
+        let starts = line_starts(&galley);
         let row_y = |line: usize| -> (f32, f32) {
-            match galley.rows.get(line.saturating_sub(1)) {
-                Some(r) => (galley_pos.y + r.pos.y, r.rect().height().max(1.0)),
-                None => (galley_pos.y + (line.saturating_sub(1)) as f32 * row_h, row_h),
+            let l = line.saturating_sub(1);
+            match (starts.get(l), galley.rows.get(starts.get(l).copied().unwrap_or(usize::MAX))) {
+                (Some(&r0), Some(r)) => {
+                    let r1 = starts.get(l + 1).copied().unwrap_or(galley.rows.len()).max(r0 + 1);
+                    let bottom = galley.rows.get(r1 - 1).map(|x| x.pos.y + x.rect().height()).unwrap_or(r.pos.y + r.rect().height());
+                    (galley_pos.y + r.pos.y, bottom - r.pos.y)
+                }
+                _ => (galley_pos.y + l as f32 * row_h, row_h),
             }
         };
+        let line_of_row = |row: usize| -> usize { starts.partition_point(|&s| s <= row).max(1) };
+        // première ligne visible
+        let first_vis = line_of_row(galley.rows.partition_point(|r| r.pos.y + r.rect().height() < offset.y)) - 1;
         let line_rect = |line: usize| -> Rect {
             let (y, h) = row_y(line);
             Rect::from_min_size(egui::pos2(text_rect.min.x, y), Vec2::new(text_rect.width().max(4000.0), h))
@@ -221,26 +381,74 @@ impl Doc {
             let byte = char_to_byte(&self.text, c);
             self.cursor_line = self.text[..byte].matches('\n').count() + 1;
             self.cursor_col = self.text[..byte].rsplit('\n').next().map(|s| s.chars().count()).unwrap_or(0) + 1;
-            if te.response.response.has_focus() && r.is_empty() {
-                bg_shapes.push(Shape::rect_filled(line_rect(self.cursor_line), 0.0, p.curline));
+        }
+        // le curseur entre dans un bloc replié (flèches, clic) : le bloc se déplie
+        if hidden(self.cursor_line) {
+            let open: Vec<usize> = folded_ranges.iter().filter(|(h, e)| self.cursor_line > *h && self.cursor_line <= *e).map(|r| r.0).collect();
+            for h in open { self.folded.remove(&h); }
+            ui.ctx().request_repaint();
+        }
+        // ligne du curseur : bleu très léger, toujours visible (comme QScintilla, alpha 28/255)
+        if o.caret_line {
+            bg_shapes.push(Shape::rect_filled(line_rect(self.cursor_line), 0.0,
+                                              p.blue.gamma_multiply(if p.light { 45.0 / 255.0 } else { 28.0 / 255.0 })));
+        }
+        // guides d'indentation en pointillés, à partir du 2e niveau (comme QScintilla)
+        if o.indent_guides {
+            let unit = self.indent_unit();
+            let count = (text_rect.height() / row_h) as usize + 3;
+            for (k, l) in self.text.split('\n').enumerate().skip(first_vis).take(count) {
+                let line = k + 1;
+                let Some(ind) = indent_of(l) else { continue };
+                let (y, h) = row_y(line);
+                if h < 2.0 { continue; }
+                let mut lvl = 1;
+                while lvl * unit < ind && lvl < 40 {
+                    let x = (galley_pos.x + (lvl * unit) as f32 * cw).round();
+                    let mut yy = y.round();
+                    while yy < y + h - 0.5 {
+                        bg_shapes.push(Shape::rect_filled(Rect::from_min_size(egui::pos2(x, yy), Vec2::splat(1.0)), 0.0, p.bg_hl));
+                        yy += 2.0;
+                    }
+                    lvl += 1;
+                }
+            }
+        }
+        // accolade correspondante : fond gris, caractère orange (rouge si elle n'a pas de paire)
+        if let Some(r) = te.cursor_range.filter(|r| r.is_empty() && o.bracket_match) {
+            let cur = char_to_byte(&self.text, r.primary.index.0);
+            let found = matching_bracket(&self.text, cur);
+            let cells: Vec<(usize, Color32)> = match found {
+                Some((a, b)) => vec![(a, p.orange), (b, p.orange)],
+                None => {
+                    let bb = self.text.as_bytes();
+                    let at = [Some(cur), cur.checked_sub(1)].into_iter().flatten()
+                        .find(|&i| bb.get(i).map(|c| b"()[]{}".contains(c)).unwrap_or(false));
+                    at.map(|i| vec![(i, p.red)]).unwrap_or_default()
+                }
+            };
+            for (byte, colr) in cells {
+                let ci = self.text[..byte].chars().count();
+                let rr = te.galley.pos_from_cursor(CCursor::new(CharIndex(ci)));
+                let cell = Rect::from_min_size(galley_pos + rr.min.to_vec2(), Vec2::new(cw, rr.height()));
+                if found.is_some() { bg_shapes.push(Shape::rect_filled(cell, 0.0, p.gutter)); } else { bg_shapes.push(Shape::rect_filled(cell, 0.0, p.bg)); }
+                let ch = self.text[byte..].chars().next().unwrap_or(' ').to_string();
+                fg_shapes.push((cell.min, ch, colr));
             }
         }
         if let Some(l) = error_line {
             bg_shapes.push(Shape::rect_filled(line_rect(l), 0.0, p.err_bg));
         }
         if let Some(l) = debug_line {
-            bg_shapes.push(Shape::rect_filled(line_rect(l), 0.0, p.yellow.gamma_multiply(0.22)));
+            bg_shapes.push(Shape::rect_filled(line_rect(l), 0.0, p.curline));
         }
         if let Some(q) = self.find.as_ref().filter(|q| q.chars().count() >= 2) {
-            let lower = self.text.to_lowercase();
-            let ql = q.to_lowercase();
-            let mut count = 0;
-            for (b, _) in lower.match_indices(&ql) {
-                count += 1;
-                if count > 2000 { break; }
-                let ci = self.text[..b.min(self.text.len())].chars().count();
+            let hits = find_all_ci(&self.text, q, 2001);
+            let count = hits.len();
+            for (b, be) in hits.into_iter().take(2000) {
+                let ci = self.text[..b].chars().count();
                 let r0 = te.galley.pos_from_cursor(CCursor::new(CharIndex(ci)));
-                let r1 = te.galley.pos_from_cursor(CCursor::new(CharIndex(ci + q.chars().count())));
+                let r1 = te.galley.pos_from_cursor(CCursor::new(CharIndex(ci + self.text[b..be].chars().count())));
                 let rr = Rect::from_min_max(galley_pos + r0.min.to_vec2(), galley_pos + egui::vec2(r1.max.x, r0.max.y));
                 bg_shapes.push(Shape::rect_filled(rr, 2.0, p.orange.gamma_multiply(0.30)));
             }
@@ -249,32 +457,56 @@ impl Doc {
         if let Some(slot) = bg_slot_holder.get() {
             child.painter().set(slot, Shape::Vec(bg_shapes));
         }
-        // gouttière : numéros de ligne et points d'arrêt
+        for (pos, ch, colr) in fg_shapes {
+            child.painter().text(pos, egui::Align2::LEFT_TOP, ch, font.clone(), colr);
+        }
+        // marges : numéros, points d'arrêt / ligne du débogueur, flèches de pliage
         let painter = ui.painter_at(gutter_rect);
         painter.rect_filled(gutter_rect, 0.0, p.bg);
-        let real_h = if galley.rows.len() > 1 { galley.rect.height() / galley.rows.len() as f32 } else { row_h };
-        let first = (offset.y / real_h).floor().max(0.0) as usize;
-        let visible = (gutter_rect.height() / real_h).ceil() as usize + 2;
-        for i in first..(first + visible).min(lines) {
+        let visible = (gutter_rect.height() / row_h).ceil() as usize + 2;
+        let headers: std::collections::HashMap<usize, usize> = folds.iter().copied().collect();
+        let mut shown = 0;
+        let mut i = first_vis;
+        while i < lines && shown < visible + 200 {
             let line = i + 1;
-            let (y, row_h) = row_y(line);
+            i += 1;
+            let (y, rh) = row_y(line);
+            if rh < 2.0 { continue; }
+            shown += 1;
             if y > gutter_rect.max.y { break; }
-            let current = line == self.cursor_line;
-            let col = if Some(line) == debug_line { p.yellow } else if current { p.fg } else { p.gutter };
-            painter.text(egui::pos2(gutter_rect.max.x - 12.0, y + row_h / 2.0), egui::Align2::RIGHT_CENTER,
-                         line.to_string(), font.clone(), col);
+            let cy = y + row_h.min(rh) / 2.0;
+            if o.line_numbers {
+                painter.text(egui::pos2(gutter_rect.min.x + num_w - 4.0, y + row_h.min(rh) / 2.0), egui::Align2::RIGHT_CENTER,
+                             line.to_string(), font.clone(), p.gutter);
+            }
+            let sym = egui::pos2(gutter_rect.min.x + num_w + sym_w / 2.0, cy);
             if self.breakpoints.contains(&line) {
-                painter.circle_filled(egui::pos2(gutter_rect.min.x + 9.0, y + row_h / 2.0), row_h * 0.28, p.red);
+                painter.circle_filled(sym, (rh * 0.36).min(7.0), p.red);
             }
             if Some(line) == debug_line {
-                crate::icons::paint(&painter, crate::icons::Icon::Run, egui::pos2(gutter_rect.min.x + 9.0, y + row_h / 2.0),
-                                    row_h * 0.7, p.yellow);
+                let s = (rh * 0.36).min(7.0);
+                painter.add(Shape::convex_polygon(vec![sym + Vec2::new(-s, -s), sym + Vec2::new(s, 0.0), sym + Vec2::new(-s, s)], p.yellow, Stroke::NONE));
+            }
+            if headers.contains_key(&line) {
+                let fc = egui::pos2(gutter_rect.min.x + num_w + sym_w + fold_w / 2.0 - 1.0, cy);
+                if self.folded.contains(&line) {
+                    crate::icons::paint(&painter, crate::icons::Icon::ChevRight, fc, 14.0, p.blue);
+                } else {
+                    crate::icons::paint(&painter, crate::icons::Icon::ChevDown, fc, 14.0, p.comment);
+                }
             }
         }
-        if show_breakpoints && gutter_resp.clicked() {
+        if gutter_resp.clicked() {
             if let Some(pos) = gutter_resp.interact_pointer_pos() {
-                let line = ((pos.y - galley_pos.y) / real_h).floor() as usize + 1;
-                if line <= lines {
+                // ligne sous le clic, d'après la mise en page (les blocs repliés n'ont pas de hauteur)
+                let gy = pos.y - galley_pos.y;
+                let idx = galley.rows.partition_point(|r| r.pos.y + r.rect().height() <= gy);
+                let line = line_of_row(idx).min(lines);
+                if o.folding && pos.x >= gutter_rect.min.x + num_w + sym_w {
+                    if headers.contains_key(&line) && !self.folded.remove(&line) {
+                        self.folded.insert(line);
+                    }
+                } else if show_breakpoints && line <= lines {
                     if !self.breakpoints.remove(&line) {
                         self.breakpoints.insert(line);
                     }
@@ -289,19 +521,49 @@ impl Doc {
         events
     }
 
-    fn handle_keys(&mut self, ui: &mut egui::Ui, te_id: egui::Id) {
+    fn handle_keys(&mut self, ui: &mut egui::Ui, te_id: egui::Id, o: &EditorOpts) {
         let ctx = ui.ctx().clone();
         let Some(mut state) = egui::TextEdit::load_state(&ctx, te_id) else { return };
         let Some(range) = state.cursor.char_range() else { return };
-        let enter = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+        let enter = o.auto_indent && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
         let tab = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab));
         let untab = ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Tab));
-        let comment = ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Slash)
-            || i.consume_key(Modifiers::COMMAND, Key::Colon));
-        let dup = ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::D));
+        let comment = std::mem::take(&mut self.pending_comment);
+        let dup = std::mem::take(&mut self.pending_duplicate);
+        // fermeture automatique : ( [ { " ' tapés → la paire, le curseur au milieu ;
+        // taper le caractère fermant juste devant lui le saute
+        if o.close_brackets && !(enter || tab || untab || comment || dup) {
+            let sorted = range.as_sorted_char_range();
+            let (s, e) = (char_to_byte(&self.text, sorted.start.0), char_to_byte(&self.text, sorted.end.0));
+            let next = self.text[e..].chars().next();
+            let prev = self.text[..s].chars().next_back();
+            let typed = ctx.input(|i| i.events.iter().find_map(|ev| match ev { egui::Event::Text(t) if t.chars().count() == 1 => Some(t.clone()), _ => None }));
+            if let Some(t) = typed {
+                let c = t.chars().next().unwrap_or(' ');
+                let pair = match c { '(' => Some(')'), '[' => Some(']'), '{' => Some('}'), '"' | '\'' => Some(c), _ => None };
+                let word_before = prev.map(|x| x.is_alphanumeric()).unwrap_or(false);
+                let mut done = None;
+                if s == e && matches!(c, ')' | ']' | '}' | '"' | '\'') && next == Some(c) {
+                    done = Some((sorted.start.0 + 1, sorted.start.0 + 1));
+                } else if let Some(close) = pair.filter(|_| !(matches!(c, '"' | '\'') && word_before)) {
+                    let inner = self.text[s..e].to_string();
+                    self.text.replace_range(s..e, &format!("{c}{inner}{close}"));
+                    let a = sorted.start.0 + 1;
+                    done = Some((a, a + inner.chars().count()));
+                }
+                if let Some((a, b)) = done {
+                    ctx.input_mut(|i| { if let Some(k) = i.events.iter().position(|ev| matches!(ev, egui::Event::Text(_))) { i.events.remove(k); } });
+                    state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(CharIndex(a)), CCursor::new(CharIndex(b)))));
+                    state.store(&ctx, te_id);
+                    self.cache = None;
+                    return;
+                }
+            }
+        }
         if !(enter || tab || untab || comment || dup) {
             return;
         }
+        let unit = o.indent();
         let sorted = range.as_sorted_char_range();
         let (s, e) = (char_to_byte(&self.text, sorted.start.0), char_to_byte(&self.text, sorted.end.0));
         let line_start = self.text[..s].rfind('\n').map(|x| x + 1).unwrap_or(0);
@@ -316,7 +578,7 @@ impl Doc {
             let mut ins = format!("\n{indent}");
             let mut after = String::new();
             if opens {
-                ins.push_str("    ");
+                ins.push_str(&unit);
                 if matches!(next, Some('}') | Some(')') | Some(']')) {
                     after = format!("\n{indent}");
                 }
@@ -325,8 +587,8 @@ impl Doc {
             let c = self.text[..s].chars().count() + ins.chars().count();
             new_cursor = (c, c);
         } else if (tab && s == e) || (tab && !self.text[s..e].contains('\n')) {
-            self.text.replace_range(s..e, "    ");
-            let c = self.text[..s].chars().count() + 4;
+            self.text.replace_range(s..e, &unit);
+            let c = self.text[..s].chars().count() + unit.chars().count();
             new_cursor = (c, c);
         } else if dup {
             let le = self.text[e..].find('\n').map(|x| x + e).unwrap_or(self.text.len());
@@ -360,11 +622,11 @@ impl Doc {
                 }).collect::<Vec<_>>().join("\n")
             } else if untab {
                 block.lines().map(|l| {
-                    let n = l.chars().take(4).take_while(|c| *c == ' ').count();
+                    let n = l.chars().take(o.tab_width.max(1)).take_while(|c| *c == ' ').count();
                     if n == 0 && l.starts_with('\t') { l[1..].to_string() } else { l[n..].to_string() }
                 }).collect::<Vec<_>>().join("\n")
             } else {
-                block.lines().map(|l| if l.is_empty() { String::new() } else { format!("    {l}") }).collect::<Vec<_>>().join("\n")
+                block.lines().map(|l| if l.is_empty() { String::new() } else { format!("{unit}{l}") }).collect::<Vec<_>>().join("\n")
             };
             self.text.replace_range(line_start..le, &new_block);
             let a = self.text[..line_start].chars().count();
@@ -392,6 +654,35 @@ impl Doc {
     }
 }
 
+/// Réglages de l'éditeur (fenêtre Paramètres).
+#[derive(Clone, Copy, PartialEq)]
+pub struct EditorOpts {
+    pub tab_width: usize,
+    pub use_spaces: bool,
+    pub line_numbers: bool,
+    pub indent_guides: bool,
+    pub caret_line: bool,
+    pub bracket_match: bool,
+    pub folding: bool,
+    pub word_wrap: bool,
+    pub auto_indent: bool,
+    pub close_brackets: bool,
+}
+
+impl Default for EditorOpts {
+    fn default() -> Self {
+        EditorOpts { tab_width: 4, use_spaces: true, line_numbers: true, indent_guides: true, caret_line: true,
+                     bracket_match: true, folding: true, word_wrap: false, auto_indent: true, close_brackets: false }
+    }
+}
+
+impl EditorOpts {
+    /// Ce qu'insère la touche Tab (espaces ou tabulation).
+    fn indent(&self) -> String {
+        if self.use_spaces { " ".repeat(self.tab_width.max(1)) } else { "\t".into() }
+    }
+}
+
 #[derive(Default)]
 pub struct EditorEvents {
     pub changed: bool,
@@ -401,6 +692,45 @@ pub struct EditorEvents {
     pub matches: usize,
 }
 
+/// Recherche sans tenir compte des majuscules, avec des positions (octets) dans le texte d'origine
+/// (passer par `to_lowercase()` du texte entier décale les positions pour certains caractères).
+pub fn find_all_ci(text: &str, q: &str, limit: usize) -> Vec<(usize, usize)> {
+    let ql: Vec<char> = q.chars().flat_map(|c| c.to_lowercase()).collect();
+    let mut out = Vec::new();
+    if ql.is_empty() { return out; }
+    let mut p = 0;
+    while p < text.len() && out.len() < limit {
+        match match_ci_at(text, p, &ql) {
+            Some(e) => { out.push((p, e)); p = e.max(p + 1); }
+            None => p += text[p..].chars().next().map(|c| c.len_utf8()).unwrap_or(1),
+        }
+        while p < text.len() && !text.is_char_boundary(p) { p += 1; }
+    }
+    out
+}
+
+fn match_ci_at(text: &str, p: usize, ql: &[char]) -> Option<usize> {
+    let mut k = 0;
+    for (i, c) in text[p..].char_indices() {
+        for lc in c.to_lowercase() {
+            if k >= ql.len() || ql[k] != lc { return None; }
+            k += 1;
+        }
+        if k == ql.len() { return Some(p + i + c.len_utf8()); }
+    }
+    None
+}
+
+/// Occurrence suivante (ou précédente) de `q` à partir de l'octet `from`, en reprenant au début.
+pub fn find_ci(text: &str, q: &str, from: usize, back: bool) -> Option<(usize, usize)> {
+    let all = find_all_ci(text, q, usize::MAX);
+    if back {
+        all.iter().rev().find(|(s, _)| *s < from).or(all.last()).copied()
+    } else {
+        all.iter().find(|(s, _)| *s >= from).or(all.first()).copied()
+    }
+}
+
 pub fn char_to_byte(s: &str, c: usize) -> usize {
     s.char_indices().nth(c).map(|(b, _)| b).unwrap_or(s.len())
 }
@@ -408,4 +738,108 @@ pub fn char_to_byte(s: &str, c: usize) -> usize {
 #[allow(dead_code)]
 pub fn stroke(c: Color32) -> Stroke {
     Stroke::new(1.0, c)
+}
+
+
+/// Indentation d'une ligne en colonnes (tabulation = 4), `None` pour une ligne vide.
+fn indent_of(line: &str) -> Option<usize> {
+    if line.trim().is_empty() { return None; }
+    let mut n = 0;
+    for c in line.chars() {
+        match c { ' ' => n += 1, '\t' => n += 4 - n % 4, _ => break }
+    }
+    Some(n)
+}
+
+/// Parenthèse, crochet ou accolade sous le curseur (ou juste avant) et celle qui lui correspond
+/// (positions en octets). La recherche s'arrête à 200 000 caractères.
+fn matching_bracket(text: &str, cursor: usize) -> Option<(usize, usize)> {
+    let b = text.as_bytes();
+    let pick = |i: usize| b.get(i).copied().filter(|c| b"()[]{}".contains(c)).map(|c| (i, c));
+    let (at, c) = pick(cursor).or_else(|| cursor.checked_sub(1).and_then(pick))?;
+    let (open, close, fwd) = match c {
+        b'(' => (b'(', b')', true), b'[' => (b'[', b']', true), b'{' => (b'{', b'}', true),
+        b')' => (b'(', b')', false), b']' => (b'[', b']', false), _ => (b'{', b'}', false),
+    };
+    let mut depth = 0i32;
+    if fwd {
+        for (k, &x) in b.iter().enumerate().skip(at).take(200_000) {
+            if x == open { depth += 1 } else if x == close { depth -= 1; if depth == 0 { return Some((at, k)); } }
+        }
+    } else {
+        let lo = at.saturating_sub(200_000);
+        for k in (lo..=at).rev() {
+            let x = b[k];
+            if x == close { depth += 1 } else if x == open { depth -= 1; if depth == 0 { return Some((k, at)); } }
+        }
+    }
+    None
+}
+
+
+/// Première rangée de chaque ligne du texte dans la mise en page.
+fn line_starts(g: &Galley) -> Vec<usize> {
+    let mut v = Vec::with_capacity(g.rows.len() + 1);
+    v.push(0);
+    for (i, r) in g.rows.iter().enumerate() {
+        if r.ends_with_newline { v.push(i + 1); }
+    }
+    v
+}
+
+/// Rend invisibles et presque sans hauteur les lignes des blocs repliés.
+fn fold_job(job: egui::text::LayoutJob, hidden: &[(usize, usize)]) -> egui::text::LayoutJob {
+    let mut out = job.clone();
+    out.sections.clear();
+    for sec in job.sections {
+        let (a, b) = (sec.byte_range.start.0, sec.byte_range.end.0);
+        // points de coupe : bornes des zones cachées à l'intérieur de la section
+        let mut cuts = vec![a, b];
+        for (x, y) in hidden {
+            if *x > a && *x < b { cuts.push(*x); }
+            if *y > a && *y < b { cuts.push(*y); }
+        }
+        cuts.sort();
+        cuts.dedup();
+        for w in cuts.windows(2) {
+            let (s, e) = (w[0], w[1]);
+            let mut f = sec.format.clone();
+            if hidden.iter().any(|(x, y)| s >= *x && e <= *y) {
+                f.color = Color32::TRANSPARENT;
+                f.line_height = Some(0.01);
+                f.font_id.size = 1.0;
+            }
+            let mut ns = sec.clone();
+            ns.leading_space = if s == a { sec.leading_space } else { 0.0 };
+            ns.byte_range = egui::text::ByteIndex(s)..egui::text::ByteIndex(e);
+            ns.format = f;
+            out.sections.push(ns);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_ci_keeps_offsets() {
+        // « İ » devient plus long en minuscules : les positions doivent rester celles du texte
+        let t = "İstanbul STRASSE straße Straße";
+        let hits = find_all_ci(t, "straße", 10);
+        assert_eq!(hits.len(), 2);
+        for (s, e) in &hits { assert_eq!(t[*s..*e].to_lowercase(), "straße"); }
+        assert_eq!(find_all_ci("aaa", "aa", 10), vec![(0, 2)]);
+        assert_eq!(find_ci("Ab ab AB", "ab", 1, false), Some((3, 5)));
+        assert_eq!(find_ci("Ab ab AB", "ab", 3, true), Some((0, 2)));
+        assert_eq!(find_ci("Ab ab AB", "ab", 0, true), Some((6, 8)));
+    }
+
+    #[test]
+    fn trim_trailing_spaces() {
+        let mut d = Doc::untitled(1, "a  \nb\t\n  c ");
+        d.trim_trailing();
+        assert_eq!(d.text, "a\nb\n  c");
+    }
 }

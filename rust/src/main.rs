@@ -1,15 +1,18 @@
 //! StudentCode : éditeur de code léger pour étudiants (version Rust).
 #![allow(deprecated)]
+#![allow(dead_code)]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod app;
 mod editor;
 mod explorer;
+mod fileicons_gen;
 mod highlight;
 mod icons;
 mod imageview;
 mod pdf;
 mod pip;
 mod secrets;
+mod settings;
 mod ssh;
 mod vpn;
 mod pyscripter;
@@ -78,7 +81,7 @@ fn main() -> eframe::Result {
     let mut vp = egui::ViewportBuilder::default()
         .with_title("StudentCode")
         .with_app_id("studentcode")
-        .with_inner_size([1280.0, 800.0])
+        .with_inner_size(test_size().unwrap_or([1280.0, 800.0]))
         .with_min_inner_size([640.0, 400.0])
         .with_decorations(false)
         .with_transparent(false);
@@ -92,4 +95,11 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native("StudentCode", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, target)))))
+}
+
+/// Taille de fenêtre imposée pour les captures de test (STUDENTCODE_SIZE=1400x820).
+fn test_size() -> Option<[f32; 2]> {
+    let v = std::env::var("STUDENTCODE_SIZE").ok()?;
+    let (w, h) = v.split_once('x')?;
+    Some([w.parse().ok()?, h.parse().ok()?])
 }

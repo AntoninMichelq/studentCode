@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex};
 pub enum Kind {
     Local,
     Ssh(crate::ssh::Lab, String),
+    /// interpréteur Python interactif (onglet « Interpréteur Python »)
+    Repl,
 }
 
 enum SshMsg {
@@ -42,7 +44,7 @@ fn nz(v: u16) -> NonZeroU16 {
 impl Terminal {
     pub fn new() -> Terminal {
         Terminal {
-            parser: Arc::new(Mutex::new(vt100::Parser::new(nz(24), nz(80), 3000))),
+            parser: Arc::new(Mutex::new(vt100::Parser::new(nz(24), nz(80), crate::settings::globals().scrollback))),
             writer: None,
             master: None,
             ssh: None,
@@ -57,9 +59,18 @@ impl Terminal {
         }
     }
 
-    pub fn new_ssh(lab: crate::ssh::Lab, password: String) -> Terminal {
+    /// Terminal sur une machine distante ; `dir` : dossier où il s'ouvre (sinon le dossier personnel).
+    /// Interpréteur Python interactif.
+    pub fn new_repl() -> Terminal {
+        let mut t = Terminal::new();
+        t.kind = Kind::Repl;
+        t
+    }
+
+    pub fn new_ssh(lab: crate::ssh::Lab, password: String, dir: Option<String>) -> Terminal {
         let mut t = Terminal::new();
         t.kind = Kind::Ssh(lab, password);
+        t.pending_cd = dir;
         t
     }
 
@@ -69,11 +80,12 @@ impl Terminal {
         let (lab, pw) = (lab.clone(), pw.clone());
         let (tx, rx) = std::sync::mpsc::channel::<SshMsg>();
         self.ssh = Some(tx);
-        *self.parser.lock().unwrap() = vt100::Parser::new(nz(self.size.0), nz(self.size.1), 3000);
+        *self.parser.lock().unwrap() = vt100::Parser::new(nz(self.size.0), nz(self.size.1), crate::settings::globals().scrollback);
         self.parser.lock().unwrap().process(format!("Connexion à {}…\r\n", lab.label()).as_bytes());
         *self.alive.lock().unwrap() = true;
         let (parser, alive, err, ctx) = (self.parser.clone(), self.alive.clone(), self.error.clone(), ctx.clone());
         let size = self.size;
+        let start_dir = self.pending_cd.take();
         std::thread::spawn(move || {
             let fail = |m: String| {
                 parser.lock().unwrap().process(format!("\r\n\x1b[31m{m}\x1b[0m\r\n").as_bytes());
@@ -90,6 +102,10 @@ impl Terminal {
                 return fail(e.to_string());
             }
             if let Err(e) = ch.shell() { return fail(e.to_string()); }
+            if let Some(d) = start_dir {
+                // espace devant : la commande n'encombre pas l'historique ; clear : invite propre
+                let _ = ch.write_all(format!(" cd '{}' && clear\n", d.replace('\'', "'\\''")).as_bytes());
+            }
             s.set_blocking(false);
             let mut buf = [0u8; 16384];
             loop {
@@ -129,7 +145,21 @@ impl Terminal {
         let pty = native_pty_system();
         let pair = pty.openpty(PtySize { rows: self.size.0, cols: self.size.1, pixel_width: 0, pixel_height: 0 })
             .map_err(|e| e.to_string())?;
-        let mut cmd = if cfg!(windows) {
+        let py = if matches!(self.kind, Kind::Repl) { crate::runner::python() } else { None };
+        let mut cmd = if let Some(py) = py {
+            let mut c = CommandBuilder::new(&py[0]);
+            for a in &py[1..] { c.arg(a); }
+            c.arg("-q");
+            c.arg("-i");
+            c.env("PYTHONIOENCODING", "utf-8");
+            c
+        } else if let Some(sh) = Some(crate::settings::globals().shell).filter(|s| !s.is_empty()) {
+            // shell choisi dans les Paramètres (avec ses arguments éventuels)
+            let mut it = sh.split_whitespace();
+            let mut c = CommandBuilder::new(it.next().unwrap_or("sh"));
+            for a in it { c.arg(a); }
+            c
+        } else if cfg!(windows) {
             let ps = ["pwsh.exe", "powershell.exe"].into_iter()
                 .find(|p| crate::runner::which(p.trim_end_matches(".exe")).is_some()).unwrap_or("cmd.exe");
             let mut c = CommandBuilder::new(ps);
@@ -151,7 +181,7 @@ impl Terminal {
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
         self.writer = Some(pair.master.take_writer().map_err(|e| e.to_string())?);
         self.master = Some(pair.master);
-        *self.parser.lock().unwrap() = vt100::Parser::new(nz(self.size.0), nz(self.size.1), 3000);
+        *self.parser.lock().unwrap() = vt100::Parser::new(nz(self.size.0), nz(self.size.1), crate::settings::globals().scrollback);
         *self.alive.lock().unwrap() = true;
         let parser = self.parser.clone();
         let alive = self.alive.clone();
@@ -228,7 +258,7 @@ impl Terminal {
         if !self.started {
             self.started = true;
             match self.kind {
-                Kind::Local => {
+                Kind::Local | Kind::Repl => {
                     let dir = self.pending_cd.take().map(std::path::PathBuf::from).unwrap_or_else(|| cwd.to_path_buf());
                     if let Err(e) = self.start(&dir, ui.ctx()) {
                         self.parser.lock().unwrap().process(format!("Impossible de lancer le shell : {e}\r\n").as_bytes());
