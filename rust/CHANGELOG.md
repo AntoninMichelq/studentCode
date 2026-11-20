@@ -1,5 +1,13 @@
 # StudentCode en Rust — journal des versions
 
+## 2.0.1
+
+- Windows : le terminal restait vide (PowerShell ne démarrait pas). La console de Windows
+  demande la position du curseur au démarrage et attend la réponse ; StudentCode répond
+  maintenant à cette question (et aux autres questions des programmes au terminal).
+- L'autotest de la fabrication vérifie qu'un vrai shell répond dans le terminal, sous Windows
+  comme sous Linux.
+
 ## 2.0.0
 
 Première version stable de la réécriture en Rust (plus une préversion).

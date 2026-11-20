@@ -23,7 +23,8 @@ enum SshMsg {
 
 pub struct Terminal {
     parser: Arc<Mutex<vt100::Parser>>,
-    writer: Option<Box<dyn Write + Send>>,
+    /// partagé avec le fil de lecture, qui répond lui-même aux questions du terminal
+    writer: Option<Arc<Mutex<Box<dyn Write + Send>>>>,
     master: Option<Box<dyn MasterPty + Send>>,
     ssh: Option<std::sync::mpsc::Sender<SshMsg>>,
     alive: Arc<Mutex<bool>>,
@@ -35,6 +36,60 @@ pub struct Terminal {
     /// le terminal a le clavier : les raccourcis de l'app (Ctrl+W, Ctrl+B…) lui sont laissés
     pub focused: bool,
     pub error: Arc<Mutex<Option<String>>>,
+}
+
+/// Réponses aux questions qu'un programme pose au terminal : position du curseur (ESC[6n, que
+/// ConPTY envoie au démarrage sous Windows et dont il attend la réponse), état (ESC[5n) et type de
+/// terminal (ESC[c). `tail` garde la fin du morceau précédent, une question pouvant être coupée en deux.
+pub fn answer_queries(data: &[u8], tail: &mut Vec<u8>, cursor: (u16, u16)) -> Vec<u8> {
+    let mut all = std::mem::take(tail);
+    let skip = all.len();
+    all.extend_from_slice(data);
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < all.len() {
+        if all[i] == 0x1b && all.get(i + 1) == Some(&b'[') {
+            let rest = &all[i + 2..];
+            let end = i + 2;
+            let (q, len): (&[u8], usize) = if rest.starts_with(b"6n") { (b"6n", 2) }
+                else if rest.starts_with(b"5n") { (b"5n", 2) }
+                else if rest.starts_with(b"c") { (b"c", 1) }
+                else if rest.starts_with(b"0c") { (b"c", 2) }
+                else { (b"", 0) };
+            // la question doit finir dans ce morceau-ci (sinon elle a déjà eu sa réponse)
+            if len > 0 && end + len > skip {
+                match q {
+                    b"6n" => out.extend_from_slice(format!("\x1b[{};{}R", cursor.0 + 1, cursor.1 + 1).as_bytes()),
+                    b"5n" => out.extend_from_slice(b"\x1b[0n"),
+                    _ => out.extend_from_slice(b"\x1b[?1;2c"),
+                }
+                i = end + len;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    // début possible d'une question coupée : on le garde pour le morceau suivant
+    let keep = all.len().saturating_sub(3);
+    if let Some(p) = all[keep..].iter().rposition(|&b| b == 0x1b) { *tail = all[keep + p..].to_vec(); }
+    out
+}
+
+/// Autotest : un vrai shell dans un pseudo-terminal répond-il ? (`--selftest`)
+pub fn probe() -> Result<(), String> {
+    let ctx = egui::Context::default();
+    let mut t = Terminal::new();
+    t.start(&std::env::temp_dir(), &ctx)?;
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    t.write(b"echo SC_TERM_OK\r");
+    for _ in 0..100 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let txt = t.parser.lock().unwrap().screen().contents();
+        if txt.lines().any(|l| l.trim() == "SC_TERM_OK") { t.kill(); return Ok(()); }
+    }
+    let txt = t.parser.lock().unwrap().screen().contents();
+    t.kill();
+    Err(format!("le shell ne répond pas (écran : {:?})", txt.chars().take(200).collect::<String>()))
 }
 
 fn nz(v: u16) -> NonZeroU16 {
@@ -179,7 +234,8 @@ impl Terminal {
         let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-        self.writer = Some(pair.master.take_writer().map_err(|e| e.to_string())?);
+        let writer = Arc::new(Mutex::new(pair.master.take_writer().map_err(|e| e.to_string())?));
+        self.writer = Some(writer.clone());
         self.master = Some(pair.master);
         *self.parser.lock().unwrap() = vt100::Parser::new(nz(self.size.0), nz(self.size.1), crate::settings::globals().scrollback);
         *self.alive.lock().unwrap() = true;
@@ -189,11 +245,22 @@ impl Terminal {
         std::thread::spawn(move || {
             let mut child = child;
             let mut buf = [0u8; 16384];
+            let mut tail = Vec::new();
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        parser.lock().unwrap().process(&buf[..n]);
+                        let cursor = {
+                            let mut p = parser.lock().unwrap();
+                            p.process(&buf[..n]);
+                            p.screen().cursor_position()
+                        };
+                        // Windows (ConPTY) demande où est le curseur au démarrage et n'affiche rien
+                        // tant qu'on ne répond pas : sans ça, PowerShell reste sur un écran vide
+                        let reply = answer_queries(&buf[..n], &mut tail, cursor);
+                        if !reply.is_empty() {
+                            if let Ok(mut w) = writer.lock() { let _ = w.write_all(&reply); let _ = w.flush(); }
+                        }
                         ctx.request_repaint();
                     }
                 }
@@ -210,9 +277,11 @@ impl Terminal {
             let _ = t.send(SshMsg::Data(data.to_vec()));
             return;
         }
-        if let Some(w) = self.writer.as_mut() {
-            let _ = w.write_all(data);
-            let _ = w.flush();
+        if let Some(w) = self.writer.as_ref() {
+            if let Ok(mut w) = w.lock() {
+                let _ = w.write_all(data);
+                let _ = w.flush();
+            }
         }
     }
 
@@ -500,5 +569,26 @@ fn conv(c: vt100::Color, p: &Palette, fg: bool) -> Color32 {
                 Color32::from_rgb(g, g, g)
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn answers_cursor_query() {
+        let mut tail = Vec::new();
+        assert_eq!(answer_queries(b"abc\x1b[6n", &mut tail, (0, 0)), b"\x1b[1;1R");
+        // question coupée entre deux lectures
+        assert!(answer_queries(b"x\x1b[", &mut tail, (2, 4)).is_empty());
+        assert_eq!(answer_queries(b"6ny", &mut tail, (2, 4)), b"\x1b[3;5R");
+        assert!(answer_queries(b"\x1b[31mrouge\x1b[0m", &mut tail, (0, 0)).is_empty());
+        assert_eq!(answer_queries(b"\x1b[c", &mut tail, (0, 0)), b"\x1b[?1;2c");
+    }
+
+    #[test]
+    fn local_shell_answers() {
+        probe().unwrap();
     }
 }

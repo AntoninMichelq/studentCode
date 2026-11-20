@@ -49,6 +49,10 @@ fn selftest() -> i32 {
     say!("StudentCode {} · module PyScripter : {}", app::VERSION,
              pyscripter::module_dir().map(|d| d.display().to_string()).unwrap_or("absent".into()));
     say!("Python : {:?}", runner::python());
+    match terminal::probe() {
+        Ok(()) => { say!("terminal : OK"); }
+        Err(e) => problems.push(format!("terminal : {e}")),
+    }
     match pdf::module_lib() {
         Some(lib) => match pdf::check() {
             Ok(()) => { say!("module Lecteur PDF : {}", lib.display()); }
