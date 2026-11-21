@@ -284,6 +284,8 @@ pub struct App {
     /// action dont on attend le nouveau raccourci
     key_capture: Option<crate::settings::Action>,
     menu_request: bool,
+    /// fin de programme à annoncer (code, suite de la sortie, moment)
+    pending_end: Option<(String, String, Instant)>,
     /// points d'arrêt de la session (fichiers ouverts ou non)
     bp_store: BTreeMap<String, Vec<usize>>,
     autosave_tab: Option<u64>,
@@ -354,7 +356,11 @@ impl App {
     pub fn new(cc: &eframe::CreationContext, arg: Option<PathBuf>) -> App {
         let cfg = crate::settings::Settings::load();
         theme::load_fonts(&cc.egui_ctx, &cfg.code_font, &cfg.ui_font);
-        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        cc.egui_ctx.options_mut(|o| {
+            o.zoom_with_keyboard = false;
+            // un clic lent reste un clic (les boutons acceptent aussi un clic qui bouge : icons::tolerant)
+            o.input_options.max_click_duration = 2.5;
+        });
         cc.egui_ctx.set_zoom_factor(cfg.ui_scale);
         let raw_sess = config_dir().and_then(|d| std::fs::read_to_string(d.join("session.json")).ok());
         let first_launch = raw_sess.is_none();
@@ -379,7 +385,7 @@ impl App {
             find_text: String::new(), replace_text: String::new(), find_info: String::new(), dialog: None,
             status: None, recent: sess.recent.clone(), run_args: sess.run_args.clone(), allow_quit: false,
             title: String::new(), new_count: 0, ctx: cc.egui_ctx.clone(), logo: None,
-            labs: ssh::load_labs(), sessions: Vec::new(), ssh_sel: 0, ssh_new: false, cfg, settings_open: false, settings_page: 0, key_capture: None, menu_request: false, bp_store: BTreeMap::new(), autosave_tab: None, autosave_focus: true, cfg_dirty: false, last_edit: None, dbg_eval: String::new(), ssh_hidden: false, start_url: String::new(), libs_open: false, quick: String::new(), diag: None,
+            labs: ssh::load_labs(), sessions: Vec::new(), ssh_sel: 0, ssh_new: false, cfg, settings_open: false, settings_page: 0, key_capture: None, menu_request: false, pending_end: None, bp_store: BTreeMap::new(), autosave_tab: None, autosave_focus: true, cfg_dirty: false, last_edit: None, dbg_eval: String::new(), ssh_hidden: false, start_url: String::new(), libs_open: false, quick: String::new(), diag: None,
             vpns: Vec::new(), vpn_sel: None, vpn_list: None, vpn_job: None, vpn_status: String::new(),
             vpn_creds: HashMap::new(), vpn_refreshed: None,
             bookmarks: if sess.bookmarks.is_empty() { default_bookmarks() } else { sess.bookmarks.clone() },
@@ -536,6 +542,7 @@ impl App {
         self.next_uid += 1;
         self.tabs.push(Tab { c, pane, uid });
         self.pane_active.insert(pane, uid);
+        if let Some(d) = self.tabs.last_mut().and_then(|t| t.doc_mut()) { d.want_focus = true; }
         self.tabs.len() - 1
     }
 
@@ -559,6 +566,8 @@ impl App {
         let (pane, uid) = (self.tabs[i].pane, self.tabs[i].uid);
         self.pane_active.insert(pane, uid);
         self.focus_pane = pane;
+        // le clavier va au fichier qu'on vient de choisir
+        if let Some(d) = self.tabs[i].doc_mut() { d.want_focus = true; }
     }
 
     pub fn open_file(&mut self, path: &Path) {
@@ -698,8 +707,9 @@ impl App {
         }
         if self.pane_active.get(&t.pane) == Some(&t.uid) {
             // l'onglet voisin du même volet devient visible
-            if let Some(n) = self.tabs.iter().rev().find(|x| x.pane == t.pane) {
+            if let Some(n) = self.tabs.iter_mut().rev().find(|x| x.pane == t.pane) {
                 self.pane_active.insert(t.pane, n.uid);
+                if let Some(d) = n.doc_mut() { d.want_focus = true; }
             } else {
                 self.pane_active.remove(&t.pane);
             }
@@ -926,13 +936,15 @@ impl App {
                         self.out(before, OutKind::Normal);
                         let rest = &rest[END_MARK.len()..];
                         let (code, after) = rest.split_once('\x1e').unwrap_or((rest, ""));
-                        self.out(&format!("\n── Programme terminé (code {code}) · interpréteur actif : les variables, fonctions et classes du programme sont disponibles ──\n"),
-                                 if code.trim() == "0" { OutKind::Info } else { OutKind::Warn });
+                        // le message de fin attend un instant : les erreurs (autre canal) arrivent
+                        // parfois juste après, et doivent s'afficher avant lui
+                        self.pending_end = Some((code.to_string(), after.to_string(), Instant::now()));
                         self.repl = true;
                         self.dbg = None;
                         self.frames.clear();
                         self.dbg_line = None;
-                        self.out(after, OutKind::Normal);
+                    } else if let Some(p) = self.pending_end.as_mut() {
+                        p.1.push_str(&t); // après le message de fin
                     } else {
                         self.out(&t, OutKind::Normal);
                     }
@@ -940,7 +952,14 @@ impl App {
                 Out::Stderr(t) => self.out(&runner::strip_ansi(&t), OutKind::Error),
             }
         }
-        if let Some(code) = exit {
+        if self.pending_end.as_ref().map(|p| p.2.elapsed() >= Duration::from_millis(80) || exit.is_some()).unwrap_or(false) {
+            if let Some((code, after, _)) = self.pending_end.take() {
+                self.out(&format!("\n── Programme terminé (code {code}) · interpréteur actif : les variables, fonctions et classes du programme sont disponibles ──\n"),
+                         if code.trim() == "0" { OutKind::Info } else { OutKind::Warn });
+                self.out(&after, OutKind::Normal);
+            }
+        }
+                if let Some(code) = exit {
             let (msg, kind) = match code {
                 Some(0) => ("\n── Programme terminé (code 0) ──\n".to_string(), OutKind::Info),
                 Some(c) => (format!("\n── Programme terminé (code {c}) ──\n"), OutKind::Warn),
@@ -1593,6 +1612,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll();
+        if self.pending_end.is_some() { ctx.request_repaint_after(Duration::from_millis(40)); }
         self.shortcuts(&ctx);
         self.window_edges(&ctx);
         let title = match self.cur() {

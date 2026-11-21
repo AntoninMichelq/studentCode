@@ -118,7 +118,8 @@ impl Explorer {
                 file_badge(ui.painter(), egui::pos2(x + 31.0, cy), &name, p);
             }
             ui.painter().text(egui::pos2(x + 46.0, cy), egui::Align2::LEFT_CENTER, &name, FontId::proportional(13.3), p.fg);
-            if resp.clicked() {
+            // un clic où la souris a un peu bougé compte comme un clic (relâché sur la même ligne)
+            if resp.clicked() || (resp.drag_stopped() && resp.contains_pointer()) {
                 self.selected = Some(path.clone());
                 if is_dir {
                     if !self.expanded.remove(&path) {

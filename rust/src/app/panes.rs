@@ -141,10 +141,14 @@ impl App {
                             .or_else(|| t.doc().and_then(|d| d.remote.as_ref()).map(|(_, rp, lab)| format!("{lab}:{rp}")));
                         if resp.clicked() {
                             if hover_close { self.pane_ops.push(PaneOp::Close(uid)); }
-                            else { self.pane_active.insert(pane, uid); self.focus_pane = pane; if let Some(d) = self.tabs[i].doc_mut() { d.reload_if_changed(); } }
+                            else { self.pane_active.insert(pane, uid); self.focus_pane = pane; if let Some(d) = self.tabs[i].doc_mut() { d.reload_if_changed(); d.want_focus = true; } }
                         }
                         if resp.middle_clicked() { self.pane_ops.push(PaneOp::Close(uid)); }
-                        if resp.drag_started() { self.drag_tab = Some(uid); }
+                        if resp.drag_started() {
+                            self.drag_tab = Some(uid);
+                            // glisser (ou cliquer en bougeant un peu) affiche aussi l'onglet
+                            if !hover_close { self.pane_active.insert(pane, uid); self.focus_pane = pane; if let Some(d) = self.tabs[i].doc_mut() { d.want_focus = true; } }
+                        }
                         let others: Vec<usize> = self.panes().into_iter().filter(|x| *x != pane).collect();
                         resp.context_menu(|ui| {
                             if ui.button("Séparer à droite").clicked() { self.pane_ops.push(PaneOp::Split(uid, pane, false)); ui.close(); }

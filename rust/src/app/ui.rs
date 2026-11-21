@@ -146,7 +146,11 @@ impl App {
                         menus.push(resp);
                     }
                     // clic droit sur la barre : choisir les boutons
-                    for r in menus { r.context_menu(|ui| self.toolbar_menu(ui)); }
+                    // (identifiant à part : sinon ce menu et celui du bouton — ☰, pages web, « » » — partagent le
+                    // même état, et le clic gauche refermait aussitôt le menu qu'il venait d'ouvrir)
+                    for r in menus {
+                        egui::Popup::context_menu(&r).id(r.id.with("toolbar_ctx")).show(|ui| self.toolbar_menu(ui));
+                    }
                     if btn(ui, Icon::Min, p.fg, "Réduire").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                     }

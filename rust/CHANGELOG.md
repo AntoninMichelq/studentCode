@@ -1,5 +1,21 @@
 # StudentCode en Rust — journal des versions
 
+## 2.0.3
+
+Revue complète de l'application.
+
+- **Menu ☰** : le clic gauche n'ouvrait plus le menu (il se refermait aussitôt, à cause du
+  menu « clic droit » de la barre d'outils). Même correction pour le bouton des pages web et le
+  bouton « » » des fenêtres étroites.
+- **Clics plus tolérants** : un clic pendant lequel la souris bouge de quelques pixels, ou un
+  clic lent, compte bien comme un clic (boutons, menus, onglets, fichiers de l'explorateur).
+- Le clavier va tout de suite dans l'éditeur : au lancement, après « Nouveau fichier », en
+  ouvrant un fichier, en changeant ou en fermant un onglet.
+- Menu Édition : Couper, Copier, Coller, Tout sélectionner agissent bien sur la sélection (elle
+  était perdue en ouvrant le menu).
+- Sortie : le message d'erreur d'un programme s'affiche avant « Programme terminé », plus
+  parfois après.
+
 ## 2.0.2
 
 - **Copier / coller avec les autres programmes** : Ctrl+C, Ctrl+X, Ctrl+V ne passaient pas par

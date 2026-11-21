@@ -37,6 +37,10 @@ pub struct Doc {
     pub pending_duplicate: bool,
     /// Annuler, Copier, Coller… demandé par un menu
     pub pending_edit: Option<EditCmd>,
+    /// donner le clavier à l'éditeur (onglet ouvert ou choisi)
+    pub want_focus: bool,
+    /// dernière sélection connue quand l'éditeur avait le clavier (ouvrir un menu la fait perdre)
+    last_sel: Option<CCursorRange>,
     /// recherche vers le haut (bouton ↑ de la barre de recherche)
     pub find_back: bool,
     /// « Remplacer » : remplace l'occurrence sélectionnée par ce texte puis passe à la suivante
@@ -55,7 +59,7 @@ impl Doc {
             path: None, text: String::new(), saved_hash: hash(""), lang: Lang::Plain,
             id: egui::Id::new(("doc", n, std::time::SystemTime::now())), cache: None,
             breakpoints: BTreeSet::new(), goto: None, cursor_line: 1, cursor_col: 1, find: None, find_next: false,
-            remote: None, untitled: n, folded: BTreeSet::new(), folds: None, lines_before: 0, pending_comment: false, pending_duplicate: false, pending_edit: None, find_back: false, replace_with: None,
+            remote: None, untitled: n, folded: BTreeSet::new(), folds: None, lines_before: 0, pending_comment: false, pending_duplicate: false, pending_edit: None, want_focus: false, last_sel: None, find_back: false, replace_with: None,
         }
     }
 
@@ -235,8 +239,20 @@ impl Doc {
         let folded_ranges: Vec<(usize, usize)> = folds.iter().filter(|(h, _)| self.folded.contains(h)).copied().collect();
         let hidden = |line: usize| folded_ranges.iter().any(|(h, e)| line > *h && line <= *e);
         let te_id = self.id.with("te");
-        if let Some(cmd) = self.pending_edit.take() {
-            self.apply_edit(ui.ctx(), te_id, cmd);
+        if self.want_focus && !ui.input(|i| i.pointer.any_down() || i.pointer.any_released()) {
+            self.want_focus = false;
+            ui.memory_mut(|m| m.request_focus(te_id));
+        } else if self.want_focus {
+            ui.ctx().request_repaint();
+        }
+                // commande d'un menu : attendre la fin du clic qui a fermé le menu, sinon l'éditeur perd
+        // aussitôt le clavier et la sélection
+        if self.pending_edit.is_some() {
+            if ui.input(|i| i.pointer.any_down() || i.pointer.any_released()) {
+                ui.ctx().request_repaint();
+            } else if let Some(cmd) = self.pending_edit.take() {
+                self.apply_edit(ui.ctx(), te_id, cmd);
+            }
         }
         let focused = ui.memory(|m| m.has_focus(te_id));
         if focused || self.pending_comment || self.pending_duplicate {
@@ -381,6 +397,7 @@ impl Doc {
             let (y, h) = row_y(line);
             Rect::from_min_size(egui::pos2(text_rect.min.x, y), Vec2::new(text_rect.width().max(4000.0), h))
         };
+        if ui.memory(|m| m.has_focus(te_id)) { if let Some(r) = te.cursor_range { self.last_sel = Some(r); } }
         if let Some(r) = te.cursor_range {
             let c = r.primary.index.0;
             let byte = char_to_byte(&self.text, c);
@@ -566,7 +583,9 @@ impl Doc {
     pub fn apply_edit(&mut self, ctx: &egui::Context, te_id: egui::Id, cmd: EditCmd) {
         let mut state = egui::TextEdit::load_state(ctx, te_id).unwrap_or_default();
         let n = self.text.chars().count();
-        let range = state.cursor.char_range().unwrap_or(CCursorRange::one(CCursor::new(CharIndex(n))));
+        let focused = ctx.memory(|m| m.has_focus(te_id));
+        let range = if focused { state.cursor.char_range() } else { self.last_sel.or(state.cursor.char_range()) }
+            .unwrap_or(CCursorRange::one(CCursor::new(CharIndex(n))));
         let sorted = range.as_sorted_char_range();
         let (a, b) = (sorted.start.0.min(n), sorted.end.0.min(n));
         let (s, e) = (char_to_byte(&self.text, a), char_to_byte(&self.text, b));
@@ -630,6 +649,7 @@ impl Doc {
             }
         };
         state.set_undoer(undoer);
+        self.last_sel = Some(new_range);
         state.cursor.set_char_range(Some(new_range));
         state.store(ctx, te_id);
         self.cache = None;

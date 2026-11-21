@@ -389,7 +389,7 @@ impl App {
                 crate::explorer::file_badge(ui.painter(), egui::pos2(x + 31.0, cy), &e.name, &p);
             }
             ui.painter().text(egui::pos2(x + 46.0, cy), Align2::LEFT_CENTER, &e.name, FontId::proportional(13.3), p.fg);
-            if resp.clicked() {
+            if resp.clicked() || (resp.drag_stopped() && resp.contains_pointer()) {
                 self.sessions[i].selected = Some(e.path.clone());
                 if e.dir {
                     let s = &mut self.sessions[i];

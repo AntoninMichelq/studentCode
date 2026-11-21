@@ -125,6 +125,17 @@ pub fn paint_file(p: &Painter, c: Pos2, name: &str, size: f32, pal: &crate::them
 }
 
 /// Bouton plat de la barre d'outils (icône 18 px, comme QToolButton de la version Python).
+/// Comme un bouton du système : pressé puis relâché sur le bouton = clic, même si la souris a
+/// bougé de quelques pixels entre les deux (egui, lui, annule le clic au-delà de 6 px).
+pub fn tolerant(ui: &egui::Ui, mut resp: egui::Response) -> egui::Response {
+    if !resp.clicked() && resp.enabled() && resp.contains_pointer() {
+        let ok = ui.input(|i| i.pointer.primary_released()
+            && i.pointer.press_origin().map(|o| resp.rect.contains(o)).unwrap_or(false));
+        if ok { resp.flags |= egui::response::Flags::FAKE_PRIMARY_CLICKED; }
+    }
+    resp
+}
+
 pub fn button(ui: &mut egui::Ui, icon: Icon, col: Color32, hover_bg: Color32, tip: &str) -> egui::Response {
     sized_button(ui, icon, col, hover_bg, tip, Vec2::new(32.0, 30.0), 18.0)
 }
@@ -136,6 +147,7 @@ pub fn small(ui: &mut egui::Ui, icon: Icon, col: Color32, hover_bg: Color32, tip
 
 pub fn sized_button(ui: &mut egui::Ui, icon: Icon, col: Color32, hover_bg: Color32, tip: &str, size: Vec2, s: f32) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let resp = tolerant(ui, resp);
     if resp.hovered() {
         ui.painter().rect_filled(rect, 6.0, hover_bg);
     }
@@ -149,6 +161,7 @@ pub fn menu_item(ui: &mut egui::Ui, icon: Icon, col: Color32, text: &str) -> egu
     let tw = ui.fonts_mut(|f| f.layout_no_wrap(text.to_string(), font.clone(), Color32::WHITE)).size().x;
     let w = (tw + 54.0).max(ui.available_width());
     let (r, resp) = ui.allocate_exact_size(Vec2::new(w, 27.0), Sense::click());
+    let resp = tolerant(ui, resp);
     if resp.hovered() { ui.painter().rect_filled(r, 4.0, ui.visuals().widgets.open.weak_bg_fill); }
     paint(ui.painter(), icon, pos2(r.min.x + 16.0, r.center().y), 16.0, col);
     ui.painter().text(pos2(r.min.x + 32.0, r.center().y), egui::Align2::LEFT_CENTER, text, font, ui.visuals().text_color());
@@ -161,6 +174,7 @@ pub fn push_button(ui: &mut egui::Ui, pal: &crate::theme::Palette, icon: Option<
                    primary: bool, enabled: bool, w: f32, h: f32) -> egui::Response {
     let w = if w <= 0.0 { ui.available_width() } else { w };
     let (r, resp) = ui.allocate_exact_size(Vec2::new(w, h), if enabled { Sense::click() } else { Sense::hover() });
+    let resp = tolerant(ui, resp);
     let bg = if primary {
         if enabled { if resp.hovered() { pal.blue.gamma_multiply(0.85) } else { pal.blue } } else { pal.bg_hl }
     } else if resp.hovered() && enabled { pal.gutter } else { pal.bg_hl };
@@ -196,6 +210,7 @@ pub fn check_box(ui: &mut egui::Ui, pal: &crate::theme::Palette, on: &mut bool, 
     // texte sur plusieurs lignes si le panneau est étroit
     let galley = ui.fonts_mut(|f| f.layout(text.to_string(), font.clone(), pal.fg, (w - 20.0).max(40.0)));
     let (r, resp) = ui.allocate_exact_size(Vec2::new(w, (galley.size().y + 3.0).max(20.0)), if enabled { Sense::click() } else { Sense::hover() });
+    let resp = tolerant(ui, resp);
     let bx = Rect::from_center_size(pos2(r.min.x + 7.0, r.min.y + 10.0), Vec2::splat(13.0));
     let col = if enabled { pal.fg } else { pal.comment };
     if *on {
@@ -216,6 +231,7 @@ pub fn menu_action(ui: &mut egui::Ui, icon: Option<(Icon, Color32)>, text: &str,
     let sw = ui.fonts_mut(|f| f.layout_no_wrap(shortcut.to_string(), font.clone(), Color32::WHITE)).size().x;
     let w = (14.0 + 26.0 + tw + 36.0 + sw + 24.0).max(ui.available_width());
     let (r, resp) = ui.allocate_exact_size(Vec2::new(w, 27.0), if enabled { Sense::click() } else { Sense::hover() });
+    let resp = tolerant(ui, resp);
     if resp.hovered() && enabled { ui.painter().rect_filled(r, 4.0, ui.visuals().widgets.open.weak_bg_fill); }
     let tc = if enabled { ui.visuals().text_color() } else { ui.visuals().weak_text_color() };
     if let Some((ic, c)) = icon { paint(ui.painter(), ic, pos2(r.min.x + 22.0, r.center().y), 16.0, if enabled { c } else { tc }); }
