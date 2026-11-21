@@ -1,4 +1,4 @@
-"""Lecteur PDF de StudentCode, pensé pour la place : la page occupe tout l'onglet, et une
+"""Lecteur PDF de SCode, pensé pour la place : la page occupe tout l'onglet, et une
 barre d'outils discrète flotte en haut à droite, visible seulement quand la souris bouge.
 
 Rendu par PDFium (bibliothèque pypdfium2) : défilement continu, ajustement à la largeur,

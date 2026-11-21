@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""StudentCode — un IDE Python façon PyScripter, avec un look LazyVim.
+"""SCode — un IDE Python façon PyScripter, avec un look LazyVim.
 
 Éditeur à onglets, explorateur de fichiers, exécution, débogueur pas à pas
 (points d'arrêt, variables, pile d'appels), interpréteur interactif et
@@ -13,7 +13,7 @@ import shutil
 import sys
 import threading
 
-__version__ = "1.1.5"
+__version__ = "1.1.6"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sysinfo import (APP_DIR, FROZEN, PYTHON_MISSING, WINDOWS, child_env, prepare_children, python_cmd,
                      python_exe, quote, restart_cmd, shell_cmd)
@@ -166,7 +166,7 @@ QToolTip {{ background: {BG}; color: {FG}; border: 1px solid {GUTTER}; }}
 
 BP, CUR, CURLINE, ERRLINE = 1, 2, 3, 4  # marqueurs Scintilla
 
-DEMO = '''# Bienvenue dans StudentCode !
+DEMO = '''# Bienvenue dans SCode !
 #   F5  : exécuter          F6  : déboguer / continuer
 #   F9  : point d'arrêt     F10 : pas à pas (par-dessus)
 #   F11 : pas à pas (entrer dans la fonction)
@@ -243,7 +243,7 @@ _jedi_env = []
 
 def jedi_environment():
     """Python dont jedi lit les bibliothèques. Dans l'app empaquetée, celui de l'ordinateur
-    (sinon jedi essaierait de lancer StudentCode lui-même comme interpréteur)."""
+    (sinon jedi essaierait de lancer SCode lui-même comme interpréteur)."""
     if not _jedi_env:
         import jedi
         env = None
@@ -1576,7 +1576,7 @@ class MainWindow(QMainWindow):
         self.req_id = 0
         self.run_args = []
         self.untitled = 0
-        self.setWindowTitle("StudentCode")
+        self.setWindowTitle("SCode")
         self.setWindowIcon(QIcon(os.path.join(APP_DIR, "icon.svg")))
         self.resize(1360, 820)
 
@@ -1946,7 +1946,7 @@ class MainWindow(QMainWindow):
             if obj:
                 tb.widgetForAction(a).setObjectName(obj)
         # zone de titre : sert aussi à déplacer la fenêtre
-        self.title_lbl = QLabel("StudentCode")
+        self.title_lbl = QLabel("SCode")
         self.title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.title_lbl.setStyleSheet(f"color: {COMMENT}; background: transparent;")
@@ -2507,17 +2507,17 @@ class MainWindow(QMainWindow):
             where = shown.path or (shown.view.url().toString() if isinstance(shown, WebTab) else "")
             self.file_lbl.setText("  " + where)
             self.pos_lbl.setText("")
-            self.setWindowTitle(f"{shown.title()} — StudentCode")
+            self.setWindowTitle(f"{shown.title()} — SCode")
             if hasattr(self, "title_lbl"):
-                self.title_lbl.setText(f"{shown.title()} — StudentCode")
+                self.title_lbl.setText(f"{shown.title()} — SCode")
         elif ed:
             line, col_ = ed.getCursorPosition()
             self.file_lbl.setText("  " + (("SSH " + ed.remote_name + " : " + ed.remote) if ed.remote else (ed.path or "sans titre")))
             self.pos_lbl.setText(f"Ln {line + 1}, Col {col_ + 1}   ")
             name = os.path.basename(ed.path) if ed.path else "sans titre"
-            self.setWindowTitle(f"{name} — StudentCode")
+            self.setWindowTitle(f"{name} — SCode")
             if hasattr(self, "title_lbl"):
-                self.title_lbl.setText(f"{name} — StudentCode")
+                self.title_lbl.setText(f"{name} — SCode")
         else:
             self.file_lbl.setText("")
             self.pos_lbl.setText("")
@@ -3122,7 +3122,7 @@ class MainWindow(QMainWindow):
 
     def toggle_webgpu(self):
         self.settings.setValue("web_gpu", self.a["webgpu"].isChecked())
-        self.statusBar().showMessage("Pris en compte au prochain lancement de StudentCode.", 5000)
+        self.statusBar().showMessage("Pris en compte au prochain lancement de SCode.", 5000)
 
     def toggle_scrollbars(self):
         self.scrollbars = self.a["scrollbars"].isChecked()
@@ -3140,7 +3140,7 @@ class MainWindow(QMainWindow):
 
     def show_help(self):
         box = QMessageBox(self)
-        box.setWindowTitle(f"StudentCode {__version__} — raccourcis clavier")
+        box.setWindowTitle(f"SCode {__version__} — raccourcis clavier")
         box.setTextFormat(Qt.TextFormat.RichText)
         box.setText(SHORTCUTS)
         box.exec()
@@ -3566,7 +3566,7 @@ def selftest():
 
     problems, notes = [], []
     try:
-        say(f"StudentCode {__version__} · Python {sys.version.split()[0]} · {sys.platform}")
+        say(f"SCode {__version__} · Python {sys.version.split()[0]} · {sys.platform}")
         mods = ["jedi", "pyte", "paramiko", "keyring", "pypdfium2", "PyQt6.Qsci", "PyQt6.QtWebEngineWidgets",
                 "PyQt6.QtSvg", "terminal", "remote", "vpn", "ai", "pdfview", "langs"]
         if WINDOWS:
@@ -3650,7 +3650,8 @@ def main():
     rules = os.environ.get("QT_LOGGING_RULES", "")
     os.environ["QT_LOGGING_RULES"] = (rules + ";" if rules else "") + QUIET_QT
     app = QApplication(sys.argv)
-    app.setApplicationName("StudentCode")
+    app.setApplicationName("StudentCode")  # nom interne (dossiers de données) : inchangé
+    app.setApplicationDisplayName("SCode")
     app.setDesktopFileName("studentcode")
     app.setStyle("Fusion")
     app.setStyleSheet(QSS)

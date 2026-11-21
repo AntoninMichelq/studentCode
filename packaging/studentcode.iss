@@ -6,12 +6,12 @@
 
 [Setup]
 AppId={{6C1B8E7A-3F52-4C0E-9B7D-5A1E2D4C8F11}
-AppName=StudentCode
+AppName=SCode (Python)
 AppVersion={#AppVersion}
-AppPublisher=StudentCode
+AppPublisher=SCode
 AppPublisherURL=https://github.com/AntoninMichelq/studentCode
 DefaultDirName={localappdata}\Programs\StudentCode
-DefaultGroupName=StudentCode
+DefaultGroupName=SCode (Python)
 DisableProgramGroupPage=yes
 ; installation pour l'utilisateur courant : pas besoin d'être administrateur
 PrivilegesRequired=lowest
@@ -41,12 +41,12 @@ Name: "addtopath"; Description: "Commande « studentcode » dans les terminaux (
 Source: "..\dist\StudentCode\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\StudentCode"; Filename: "{app}\StudentCode.exe"
-Name: "{group}\Désinstaller StudentCode"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\StudentCode"; Filename: "{app}\StudentCode.exe"; Tasks: desktopicon
+Name: "{group}\SCode (Python)"; Filename: "{app}\StudentCode.exe"
+Name: "{group}\Désinstaller SCode (Python)"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\SCode (Python)"; Filename: "{app}\StudentCode.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\StudentCode.exe"; Description: "{cm:LaunchProgram,StudentCode}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\StudentCode.exe"; Description: "{cm:LaunchProgram,SCode}"; Flags: nowait postinstall skipifsilent
 
 [Registry]
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; \

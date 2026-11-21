@@ -1,4 +1,4 @@
-"""Aide par IA de StudentCode.
+"""Aide par IA de SCode.
 
 Plusieurs types de connexion, à choisir et à authentifier dans « Connexions IA » :
   - une clé d'API (OpenAI, Anthropic, Google Gemini, Mistral) : la discussion se fait

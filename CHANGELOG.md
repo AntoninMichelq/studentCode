@@ -1,5 +1,10 @@
 # Journal des versions
 
+## 1.1.6
+
+- **StudentCode s'appelle maintenant SCode** (titre de la fenêtre, menus, raccourcis, installateur). Les réglages, labs et sessions sont gardés.
+- Nouvelle icône : un « S » vide (juste son contour) sur une tuile blanche.
+
 ## 1.1.5
 
 - SSH : plusieurs terminaux sur la même machine. Clic droit sur l'onglet « SSH … » du panneau du

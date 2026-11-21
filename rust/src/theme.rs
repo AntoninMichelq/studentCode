@@ -29,6 +29,9 @@ fn c(hex: &str) -> Color32 {
 
 /// (nom, 17 couleurs : fond, fond sombre, surlignage, texte, commentaire, gouttière, bleu, cyan,
 /// vert, magenta, orange, rouge, jaune, sarcelle, sélection, ligne courante, fond d'erreur)
+/// Thème du premier lancement (clair).
+pub const DEFAULT_THEME: &str = "Papier (clair)";
+
 pub const THEMES: &[(&str, [&str; 17])] = &[
     ("Tokyo Night", ["#1a1b26", "#16161e", "#292e42", "#c0caf5", "#565f89", "#3b4261", "#7aa2f7", "#7dcfff", "#9ece6a", "#bb9af7", "#ff9e64", "#f7768e", "#e0af68", "#73daca", "#283457", "#4d4420", "#5a2233"]),
     ("Tokyo Night Storm", ["#24283b", "#1f2335", "#2f354f", "#c0caf5", "#636da6", "#3b4261", "#7aa2f7", "#7dcfff", "#9ece6a", "#bb9af7", "#ff9e64", "#f7768e", "#e0af68", "#73daca", "#2e3c64", "#544a22", "#5c2a3b"]),
@@ -61,7 +64,8 @@ pub fn python_theme() -> Option<String> {
 }
 
 pub fn palette(name: &str) -> Palette {
-    let (n, v) = THEMES.iter().find(|(n, _)| *n == name).unwrap_or(&THEMES[0]);
+    let (n, v) = THEMES.iter().find(|(n, _)| *n == name)
+        .or_else(|| THEMES.iter().find(|(n, _)| *n == DEFAULT_THEME)).unwrap_or(&THEMES[0]);
     Palette {
         bg: c(v[0]), bg_dark: c(v[1]), bg_hl: c(v[2]), fg: c(v[3]), comment: c(v[4]), gutter: c(v[5]),
         blue: c(v[6]), cyan: c(v[7]), green: c(v[8]), magenta: c(v[9]), orange: c(v[10]), red: c(v[11]),

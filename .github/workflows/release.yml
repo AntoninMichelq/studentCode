@@ -146,5 +146,5 @@ jobs:
         run: |
           ls -lh out
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
-            || gh release create "$GITHUB_REF_NAME" --title "StudentCode $GITHUB_REF_NAME" --notes-file CHANGELOG.md
+            || gh release create "$GITHUB_REF_NAME" --title "SCode (Python) $GITHUB_REF_NAME" --notes-file CHANGELOG.md
           gh release upload "$GITHUB_REF_NAME" out/* --clobber

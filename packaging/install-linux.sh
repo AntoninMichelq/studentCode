@@ -19,7 +19,7 @@ cp "$DEST/_internal/icon.svg" "$ICONS/studentcode.svg"
 cat > "$APPS/studentcode.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=StudentCode
+Name=SCode
 Comment=Code, cours et labs au même endroit
 Exec=$BIN/studentcode %F
 Icon=studentcode
@@ -33,4 +33,4 @@ gtk-update-icon-cache -q "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || t
 if ! ldconfig -p 2>/dev/null | grep -q libxcb-cursor.so.0; then
   echo "À installer une fois : sudo apt install libxcb-cursor0"
 fi
-echo "StudentCode est installé : lance-le depuis le menu des applications ou avec « studentcode »."
+echo "SCode est installé : lance-le depuis le menu des applications ou avec « studentcode »."

@@ -1,4 +1,4 @@
-"""Thèmes de couleurs de StudentCode.
+"""Thèmes de couleurs de SCode.
 
 Le thème choisi est lu au lancement ; en changer relance l'application
 (la session est restaurée, donc on retrouve tout à l'identique).

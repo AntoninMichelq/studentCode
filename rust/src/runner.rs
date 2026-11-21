@@ -73,7 +73,7 @@ pub fn python() -> Option<Vec<String>> {
 }
 
 pub const PYTHON_MISSING: &str = "Python est introuvable. Installe-le (python.org, en cochant « Add python.exe to PATH » \
-    sous Windows, ou sudo apt install python3 sous Linux), puis relance StudentCode.";
+    sous Windows, ou sudo apt install python3 sous Linux), puis relance SCode.";
 
 fn build_dir(folder: &Path) -> PathBuf {
     let mut h: u64 = 1469598103934665603;

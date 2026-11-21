@@ -1,5 +1,25 @@
 # StudentCode en Rust — journal des versions
 
+## 2.0.4
+
+- **StudentCode s'appelle maintenant SCode** : fenêtre, menus, installateurs, raccourcis du
+  bureau et du menu Démarrer, fichiers à télécharger (`SCode-…`). Nouvelle commande `scode .`
+  (`studentcode .` marche toujours). Les réglages, labs, mots de passe et sessions sont gardés,
+  et sous Windows la mise à jour remplace l'ancienne installation et ses raccourcis.
+- **Thèmes clairs** : le code s'affichait en morceaux de lettres (surtout sous Windows). Passer
+  en thème clair change le rendu des lettres, et l'éditeur réutilisait l'ancienne mise en page.
+  Corrigé pour les 11 thèmes, y compris en changeant de thème pendant le travail et quand
+  l'image des lettres se remplit (gros fichiers, zoom).
+- **Thème clair par défaut** (« Papier ») au premier lancement.
+- **Maj+Tab** désindente bien (il indentait, comme Tab) ; Maj+Entrée dans la recherche va à
+  l'occurrence précédente.
+- **Ctrl+G** et les petites fenêtres (nouveau fichier, renommer, mot de passe…) prennent le
+  clavier tout de suite : ce qu'on tapait partait dans le code et pouvait remplacer la sélection.
+  Échap les ferme, et les raccourcis sont en pause tant qu'elles sont ouvertes.
+- **Nouvelle icône** : un « S » vide, juste son contour, sur une tuile blanche. Elle est
+  maintenant intégrée au programme sous Windows (explorateur, barre des tâches, raccourcis), et
+  Ubuntu affiche la nouvelle sans garder l'ancienne en cache.
+
 ## 2.0.3
 
 Revue complète de l'application.

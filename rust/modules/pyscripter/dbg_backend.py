@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Backend de débogage de StudentCode.
+"""Backend de débogage de SCode.
 
 Lancé par l'IDE :  python dbg_backend.py <port> <stop_entry 0|1> <script> [args...]
 Dialogue avec l'IDE en JSON (une ligne par message) sur un socket local.

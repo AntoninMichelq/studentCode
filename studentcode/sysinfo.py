@@ -99,13 +99,13 @@ def prepare_children():
             pass
 
 
-PYTHON_MISSING = ("Python n'est pas installé sur cet ordinateur : StudentCode en a besoin pour exécuter "
+PYTHON_MISSING = ("Python n'est pas installé sur cet ordinateur : SCode en a besoin pour exécuter "
                   "ton code. Installe-le depuis https://www.python.org/downloads/ (coche « Add python.exe "
-                  "to PATH »), puis relance StudentCode.")
+                  "to PATH »), puis relance SCode.")
 
 
 def restart_cmd():
-    """(programme, arguments) pour relancer StudentCode."""
+    """(programme, arguments) pour relancer SCode."""
     if FROZEN:
         return sys.executable, []
     return sys.executable, [os.path.join(APP_DIR, "main.py")]

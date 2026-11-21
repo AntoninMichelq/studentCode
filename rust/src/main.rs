@@ -1,4 +1,4 @@
-//! StudentCode : éditeur de code léger pour étudiants (version Rust).
+//! SCode (ex-StudentCode) : éditeur de code léger pour étudiants (version Rust).
 #![allow(deprecated)]
 #![allow(dead_code)]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -47,7 +47,7 @@ fn selftest() -> i32 {
         Err(e) if e.contains("introuvable") => { say!("note : {e}"); }
         Err(e) => problems.push(format!("commande C : {e}")),
     }
-    say!("StudentCode {} · module PyScripter : {}", app::VERSION,
+    say!("SCode {} · module PyScripter : {}", app::VERSION,
              pyscripter::module_dir().map(|d| d.display().to_string()).unwrap_or("absent".into()));
     say!("Python : {:?}", runner::python());
     match terminal::probe() {
@@ -73,7 +73,7 @@ fn selftest() -> i32 {
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--version") {
-        println!("StudentCode {}", app::VERSION);
+        println!("SCode {}", app::VERSION);
         return Ok(());
     }
     if args.iter().any(|a| a == "--selftest") {
@@ -84,7 +84,7 @@ fn main() -> eframe::Result {
         if p.is_absolute() { p } else { std::env::current_dir().unwrap_or_default().join(p) }
     });
     let mut vp = egui::ViewportBuilder::default()
-        .with_title("StudentCode")
+        .with_title("SCode")
         .with_app_id("studentcode")
         .with_inner_size(test_size().unwrap_or([1280.0, 800.0]))
         .with_min_inner_size([640.0, 400.0])

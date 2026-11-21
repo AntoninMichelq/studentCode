@@ -417,7 +417,7 @@ impl App {
         });
         ui.menu_button("Aide", |ui| {
             ui.set_min_width(330.0);
-            ui.label(RichText::new(format!("StudentCode {VERSION} (Rust)")).strong());
+            ui.label(RichText::new(format!("SCode {VERSION}")).strong());
             ui.label(RichText::new(format!("Module PyScripter : {}", if self.module.is_some() { "installé" } else { "non installé" })).color(p.comment));
             ui.label(RichText::new(format!("Module Lecteur PDF : {}", if self.pdf_module { "installé" } else { "non installé" })).color(p.comment));
             ui.separator();
@@ -519,7 +519,8 @@ impl App {
             let fixed = btn_w(ui, "↑") + btn_w(ui, "↓") + btn_w(ui, "Remplacer") + btn_w(ui, "Tout") + btn_w(ui, "✕") + 7.0 * 6.0 + 12.0;
             let field = ((ui.available_width() - fixed) / 2.0).max(80.0);
             let r = icons::line_edit(ui, &p, &mut self.find_text, "Rechercher", egui::Id::new("find"), true, field);
-            if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) { act = 1; r.request_focus(); }
+            // Entrée : suivante, Maj+Entrée : précédente
+            if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) { act = if ui.input(|i| i.modifiers.shift) { 2 } else { 1 }; r.request_focus(); }
             if icons::push_button(ui, &p, None, "↑", false, true, btn_w(ui, "↑"), 28.0).clicked() { act = 2; }
             if icons::push_button(ui, &p, None, "↓", false, true, btn_w(ui, "↓"), 28.0).clicked() { act = 1; }
             let r2 = icons::line_edit(ui, &p, &mut self.replace_text, "Remplacer par", egui::Id::new("replace"), true, field);
@@ -927,6 +928,9 @@ impl App {
                 .show(ctx, |ui| { ui.set_min_width(360.0); if !body(ui) { keep = false; } });
         };
         let escape = ctx.input(|i| i.key_pressed(Key::Escape));
+        // première image de la fenêtre : son champ prend le clavier (sinon ce qu'on tape part dans
+        // l'éditeur, qui l'avait avant)
+        let first = ctx.data_mut(|m| { let k = egui::Id::new("dialog_shown"); let was = m.get_temp::<bool>(k).unwrap_or(false); m.insert_temp(k, true); !was });
         let is_file = matches!(d, Dialog::NewFile(..));
         match &mut d {
             Dialog::NewFile(dir, name) | Dialog::NewDir(dir, name) => {
@@ -935,7 +939,7 @@ impl App {
                 win(if is_file { "Nouveau fichier" } else { "Nouveau dossier" }, &mut |ui| {
                     ui.label(RichText::new(format!("dans {}", dir.display())).color(p.comment).size(12.0));
                     let r = ui.text_edit_singleline(name);
-                    if ui.memory(|m| m.focused().is_none()) { r.request_focus(); }
+                    if first || ui.memory(|m| m.focused().is_none()) { r.request_focus(); }
                     let ok = enter(ui, &r);
                     let mut open = !escape;
                     ui.horizontal(|ui| {
@@ -967,7 +971,7 @@ impl App {
                 let mut result = None;
                 win("Renommer", &mut |ui| {
                     let r = ui.text_edit_singleline(name);
-                    if ui.memory(|m| m.focused().is_none()) { r.request_focus(); }
+                    if first || ui.memory(|m| m.focused().is_none()) { r.request_focus(); }
                     let ok = enter(ui, &r);
                     let mut open = !escape;
                     ui.horizontal(|ui| {
@@ -1036,7 +1040,7 @@ impl App {
             }
             Dialog::Quit => {
                 let mut choice = 0;
-                win("Quitter StudentCode", &mut |ui| {
+                win("Quitter SCode", &mut |ui| {
                     ui.label("Des fichiers ont des modifications non enregistrées.");
                     let mut open = !escape;
                     ui.horizontal(|ui| {
@@ -1073,6 +1077,7 @@ impl App {
                 let mut done = None;
                 win("Aller à la ligne", &mut |ui| {
                     let r = ui.add(egui::TextEdit::singleline(a).hint_text("numéro de ligne"));
+                    if first || ui.memory(|m| m.focused().is_none()) { r.request_focus(); }
                     let ok = enter(ui, &r);
                     let mut open = !escape;
                     ui.horizontal(|ui| {
@@ -1094,7 +1099,7 @@ impl App {
                     ui.label(RichText::new(format!("{}@{}", l2.user, l2.host)).color(p.comment));
                     if !why2.is_empty() { ui.label(RichText::new(&why2).color(p.red)); }
                     let r = ui.add(egui::TextEdit::singleline(pw).password(true).hint_text("mot de passe"));
-                    if ui.memory(|m| m.focused().is_none()) { r.request_focus(); }
+                    if first || ui.memory(|m| m.focused().is_none()) { r.request_focus(); }
                     ui.checkbox(save, "Retenir le mot de passe");
                     let ok = enter(ui, &r);
                     let mut open = !escape;
@@ -1162,7 +1167,7 @@ impl App {
                 win(if dk { "Nouveau dossier (machine distante)" } else { "Nouveau fichier (machine distante)" }, &mut |ui| {
                     ui.label(RichText::new(format!("dans {dirc}")).color(p.comment).size(12.0));
                     let r = ui.text_edit_singleline(name);
-                    if ui.memory(|m| m.focused().is_none()) { r.request_focus(); }
+                    if first || ui.memory(|m| m.focused().is_none()) { r.request_focus(); }
                     let ok = enter(ui, &r);
                     let mut open = !escape;
                     ui.horizontal(|ui| {
@@ -1183,7 +1188,7 @@ impl App {
                 let mut result = None;
                 win("Renommer (machine distante)", &mut |ui| {
                     let r = ui.text_edit_singleline(name);
-                    if ui.memory(|m| m.focused().is_none()) { r.request_focus(); }
+                    if first || ui.memory(|m| m.focused().is_none()) { r.request_focus(); }
                     let ok = enter(ui, &r);
                     let mut open = !escape;
                     ui.horizontal(|ui| {
@@ -1266,6 +1271,9 @@ impl App {
                     self.save_session();
                 }
             }
+        }
+        if !(keep && self.dialog.is_none()) {
+            ctx.data_mut(|m| m.remove::<bool>(egui::Id::new("dialog_shown")));
         }
         if keep && self.dialog.is_none() {
             self.dialog = Some(d);

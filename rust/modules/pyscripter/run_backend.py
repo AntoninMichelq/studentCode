@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lanceur de StudentCode : exécute le script, puis laisse un interpréteur interactif
+"""Lanceur de SCode : exécute le script, puis laisse un interpréteur interactif
 ouvert dans le même espace de noms (comme PyScripter ou « python -i »).
 
 Usage :  python run_backend.py <script> [args...]

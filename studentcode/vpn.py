@@ -1,4 +1,4 @@
-"""VPN de StudentCode : import de fichiers .ovpn et connexion en un clic.
+"""VPN de SCode : import de fichiers .ovpn et connexion en un clic.
 
 On passe par NetworkManager (commande nmcli), comme les réglages réseau
 d'Ubuntu : pas besoin de droits administrateur pour se connecter, et le VPN
@@ -533,7 +533,7 @@ class VpnPanel(QWidget):
 # ============================================================== Windows
 class WinVpnPanel(QWidget):
     """Onglet VPN sous Windows : s'appuie sur OpenVPN GUI (client OpenVPN officiel), qui gère
-    lui-même l'identifiant et le mot de passe. StudentCode range les fichiers .ovpn dans le
+    lui-même l'identifiant et le mot de passe. SCode range les fichiers .ovpn dans le
     dossier de configurations d'OpenVPN GUI et lui envoie les ordres de connexion."""
     DOWNLOAD = "https://openvpn.net/community-downloads/"
 
@@ -591,7 +591,7 @@ class WinVpnPanel(QWidget):
         lay.addWidget(self.status)
         if not self.gui:
             self.set_status("OpenVPN GUI n'est pas installé : installe « OpenVPN Community » "
-                            "(bouton ci-dessous), puis relance StudentCode.", YELLOW)
+                            "(bouton ci-dessous), puis relance SCode.", YELLOW)
             dl = QPushButton("Télécharger OpenVPN")
             dl.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(self.DOWNLOAD)))
             lay.addWidget(dl)
@@ -676,7 +676,7 @@ class WinVpnPanel(QWidget):
         self.routes.setEnabled(bool(v) and self.split.isChecked())
 
     def write_config(self, name):
-        """Régénère <nom>.ovpn depuis le fichier d'origine, avec les réglages de StudentCode."""
+        """Régénère <nom>.ovpn depuis le fichier d'origine, avec les réglages de SCode."""
         folder = os.path.join(self.conf_dir, name)
         source = os.path.join(folder, name + ".source")
         target = os.path.join(folder, name + ".ovpn")

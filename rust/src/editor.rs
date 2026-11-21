@@ -15,7 +15,12 @@ pub struct Doc {
     saved_hash: u64,
     pub lang: Lang,
     pub id: egui::Id,
-    cache: Option<(u64, String, f32, Arc<Galley>)>,
+    /// coloration gardée d'une image à l'autre (texte, thème, taille). On ne garde pas la mise en
+    /// page elle-même : egui la jette quand il redessine les lettres (thème clair ↔ sombre, image des
+    /// lettres pleine…), et une mise en page gardée afficherait alors des morceaux d'autres lettres.
+    cache: Option<(u64, String, f32, Arc<egui::text::LayoutJob>)>,
+    /// dernière mise en page (seulement pour le défilement vers une ligne)
+    last_galley: Option<Arc<Galley>>,
     pub breakpoints: BTreeSet<usize>, // lignes (à partir de 1)
     pub goto: Option<usize>,          // ligne à afficher au prochain dessin
     pub cursor_line: usize,
@@ -57,7 +62,7 @@ impl Doc {
     pub fn new_empty(n: usize) -> Doc {
         Doc {
             path: None, text: String::new(), saved_hash: hash(""), lang: Lang::Plain,
-            id: egui::Id::new(("doc", n, std::time::SystemTime::now())), cache: None,
+            id: egui::Id::new(("doc", n, std::time::SystemTime::now())), cache: None, last_galley: None,
             breakpoints: BTreeSet::new(), goto: None, cursor_line: 1, cursor_col: 1, find: None, find_next: false,
             remote: None, untitled: n, folded: BTreeSet::new(), folds: None, lines_before: 0, pending_comment: false, pending_duplicate: false, pending_edit: None, want_focus: false, last_sel: None, find_back: false, replace_with: None,
         }
@@ -318,7 +323,7 @@ impl Doc {
         let mut sa = if o.word_wrap { egui::ScrollArea::vertical() } else { egui::ScrollArea::both() }
             .id_salt(self.id.with("scroll")).auto_shrink(false);
         if let Some(line) = scroll_to {
-            let y = self.cache.as_ref().and_then(|c| { let st = line_starts(&c.3); st.get(line.saturating_sub(1)).and_then(|r| c.3.rows.get(*r)).map(|r| r.pos.y) })
+            let y = self.last_galley.as_ref().and_then(|g| { let st = line_starts(g); st.get(line.saturating_sub(1)).and_then(|r| g.rows.get(*r)).map(|r| r.pos.y) })
                 .unwrap_or((line.saturating_sub(1)) as f32 * row_h);
             sa = sa.vertical_scroll_offset((y - text_rect.height() / 3.0).max(0.0));
         }
@@ -326,6 +331,7 @@ impl Doc {
         let pal = *p;
         let font_c = font.clone();
         let cache = &mut self.cache;
+        let last = &mut self.last_galley;
         let fold_key: Vec<usize> = self.folded.iter().copied().collect();
         let wrap_w = if o.word_wrap { (text_rect.width() - 14.0).max(80.0) } else { f32::INFINITY };
         let theme_key = format!("{:?}{:?}{:?}{}", p.fg, p.bg, fold_key, wrap_w.round());
@@ -344,18 +350,22 @@ impl Doc {
             let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap: f32| -> Arc<Galley> {
                 let text = buf.as_str();
                 let h = hash(text);
-                if let Some((ch, key, size, g)) = cache.as_ref() {
-                    if *ch == h && *key == theme_key && *size == font_c.size {
-                        return g.clone();
+                let job = match cache.as_ref() {
+                    Some((ch, key, size, j)) if *ch == h && *key == theme_key && *size == font_c.size => j.clone(),
+                    _ => {
+                        let mut job = highlight::highlight(text, lang, &pal, &font_c);
+                        if !hidden_bytes.is_empty() && hidden_bytes.iter().all(|(_, b)| *b <= text.len()) {
+                            job = fold_job(job, &hidden_bytes);
+                        }
+                        job.wrap.max_width = wrap_w;
+                        let j = Arc::new(job);
+                        *cache = Some((h, theme_key.clone(), font_c.size, j.clone()));
+                        j
                     }
-                }
-                let mut job = highlight::highlight(text, lang, &pal, &font_c);
-                if !hidden_bytes.is_empty() && hidden_bytes.iter().all(|(_, b)| *b <= text.len()) {
-                    job = fold_job(job, &hidden_bytes);
-                }
-                job.wrap.max_width = wrap_w;
-                let g = ui.fonts_mut(|f| f.layout_job(job));
-                *cache = Some((h, theme_key.clone(), font_c.size, g.clone()));
+                };
+                // mise en page refaite par egui (qu'il garde lui-même tant que les lettres sont valables)
+                let g = ui.fonts_mut(|f| f.layout_job((*job).clone()));
+                *last = Some(g.clone());
                 g
             };
             TextEdit::multiline(&mut self.text)
@@ -549,7 +559,7 @@ impl Doc {
         }).unwrap_or((false, false));
         te.response.response.context_menu(|ui| {
             ui.set_min_width(250.0);
-            let mut item = |ui: &mut egui::Ui, t: &str, k: &str, on: bool| crate::icons::menu_action(ui, None, t, k, on).clicked();
+            let item = |ui: &mut egui::Ui, t: &str, k: &str, on: bool| crate::icons::menu_action(ui, None, t, k, on).clicked();
             if item(ui, "Annuler", "Ctrl+Z", can_undo) { self.pending_edit = Some(EditCmd::Undo); ui.close(); }
             if item(ui, "Rétablir", "Ctrl+Y", can_redo) { self.pending_edit = Some(EditCmd::Redo); ui.close(); }
             ui.separator();
@@ -660,9 +670,16 @@ impl Doc {
         let ctx = ui.ctx().clone();
         let Some(mut state) = egui::TextEdit::load_state(&ctx, te_id) else { return };
         let Some(range) = state.cursor.char_range() else { return };
-        let enter = o.auto_indent && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
-        let tab = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab));
-        let untab = ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Tab));
+        // egui fait correspondre « Tab » aussi à Maj+Tab : on teste donc les touches exactement
+        // (sinon Maj+Tab indentait au lieu de désindenter)
+        let exact = |i: &mut egui::InputState, m: Modifiers, k: Key| {
+            let pos = i.events.iter().position(|e| matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. }
+                if *key == k && modifiers.shift == m.shift && modifiers.alt == m.alt && modifiers.command == m.command && modifiers.ctrl == m.ctrl));
+            match pos { Some(p) => { i.events.remove(p); true } None => false }
+        };
+        let untab = ctx.input_mut(|i| exact(i, Modifiers::SHIFT, Key::Tab));
+        let tab = ctx.input_mut(|i| exact(i, Modifiers::NONE, Key::Tab));
+        let enter = o.auto_indent && ctx.input_mut(|i| exact(i, Modifiers::NONE, Key::Enter) || exact(i, Modifiers::SHIFT, Key::Enter));
         let comment = std::mem::take(&mut self.pending_comment);
         let dup = std::mem::take(&mut self.pending_duplicate);
         // fermeture automatique : ( [ { " ' tapés → la paire, le curseur au milieu ;

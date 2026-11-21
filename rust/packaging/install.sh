@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installe StudentCode (version Rust) pour l'utilisateur courant, sans droits administrateur.
+# Installe SCode (ex-StudentCode, version Rust) pour l'utilisateur courant, sans droits administrateur.
 #   ./install.sh                 demande quels modules installer
 #   ./install.sh --all           tout installer sans poser de question
 #   ./install.sh --minimal       seulement l'éditeur (sans module)
@@ -21,7 +21,7 @@ ask() {  # ask "question" défaut(o/n)
     [[ "$r" =~ ^[oOyY] ]]
 }
 
-echo "==> StudentCode $(cat "$HERE/VERSION" 2>/dev/null) — installation dans $DEST"
+echo "==> SCode $(cat "$HERE/VERSION" 2>/dev/null) — installation dans $DEST"
 echo
 echo "Modules :"
 echo "  • PyScripter : débogueur Python pas à pas, points d'arrêt, variables,"
@@ -60,14 +60,22 @@ cat > "$BIN/studentcode" <<EOF
 exec "$DEST/studentcode" "\$@"
 EOF
 chmod +x "$BIN/studentcode"
+# nouveau nom de la commande
+ln -sf "$BIN/studentcode" "$BIN/scode"
 cp "$HERE/icon.png" "$ICONS/studentcode.png"
+# icône au nom qui change avec son contenu : GNOME garde sinon l'ancienne en cache
+rm -f "$DEST"/icon-*.png
+ICON="$DEST/icon-$(md5sum "$HERE/icon.png" | cut -c1-8).png"
+cp "$HERE/icon.png" "$ICON"
 cat > "$APPS/studentcode.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=StudentCode
+Name=SCode
+GenericName=Éditeur de code
+Keywords=StudentCode;IDE;Python;code;
 Comment=Éditeur de code léger pour étudiants
 Exec=$BIN/studentcode %F
-Icon=studentcode
+Icon=$ICON
 Terminal=false
 Categories=Development;IDE;Education;
 StartupWMClass=studentcode
@@ -76,8 +84,8 @@ update-desktop-database "$APPS" >/dev/null 2>&1 || true
 gtk-update-icon-cache -q "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
 
 echo
-echo "Terminé. Lance StudentCode depuis le menu des applications, ou dans un terminal :"
-echo "    studentcode .        (ouvre le dossier courant)"
+echo "Terminé. Lance SCode depuis le menu des applications, ou dans un terminal :"
+echo "    scode .              (ouvre le dossier courant ; « studentcode » marche aussi)"
 case ":$PATH:" in *":$BIN:"*) ;; *) echo "    (ajoute $BIN à ton PATH si la commande n'est pas trouvée)";; esac
 [ "$PYS" = 1 ] && echo "Module PyScripter installé." || echo "Sans module PyScripter (relance ./install.sh pour l'ajouter)."
 [ "$PDF" = 1 ] && echo "Module Lecteur PDF installé." || echo "Sans lecteur PDF intégré."

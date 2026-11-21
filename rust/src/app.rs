@@ -1,4 +1,4 @@
-//! Fenêtre principale de StudentCode : état de l'application et actions. Le dessin est dans
+//! Fenêtre principale de SCode : état de l'application et actions. Le dessin est dans
 //! les sous-modules (ui : barres et dialogues, panes : volets et onglets, side : panneaux).
 use crate::editor::Doc;
 use crate::explorer::{Action, Explorer};
@@ -113,7 +113,7 @@ impl Layout {
     }
 }
 
-const DEMO: &str = "# Bienvenue dans StudentCode !
+const DEMO: &str = "# Bienvenue dans SCode !
 #   F5  : exécuter          F6  : déboguer / continuer
 #   F9  : point d'arrêt     F10 : pas à pas (par-dessus)
 #   F11 : pas à pas (entrer dans la fonction)
@@ -366,7 +366,7 @@ impl App {
         let first_launch = raw_sess.is_none();
         let sess: SessionFile = raw_sess.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
         // premier lancement : on reprend le thème choisi dans la version Python s'il y en a un
-        let theme_name = if sess.theme.is_empty() { theme::python_theme().unwrap_or_else(|| theme::THEMES[0].0.to_string()) } else { sess.theme.clone() };
+        let theme_name = if sess.theme.is_empty() { theme::DEFAULT_THEME.to_string() } else { sess.theme.clone() };
         let font_size = if sess.font_size >= 9.0 { sess.font_size } else { 14.67 }; // 11 pt, comme la version Python
         let p = theme::palette(&theme_name);
         theme::apply(&cc.egui_ctx, &p, font_size);
@@ -1450,6 +1450,7 @@ impl App {
     /// Ctrl+Maj+S). Quand un terminal a le clavier, seules quelques actions restent à l'app.
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if self.key_capture.is_some() { return; } // la fenêtre Paramètres attend une touche
+        if self.dialog.is_some() { return; } // une petite fenêtre (aller à la ligne, mot de passe…) a le clavier
         let in_term = self.shown_term().map(|t| t.focused).unwrap_or(false) && self.show_bottom;
         let mut todo = Vec::new();
         let editor_focus = self.cur().and_then(|i| self.tabs[i].doc()).map(|d| d.has_focus(ctx)).unwrap_or(false);
@@ -1619,9 +1620,9 @@ impl eframe::App for App {
             Some(i) => {
                 let t = &self.tabs[i];
                 let name = if t.doc().map(|d| d.untitled > 0).unwrap_or(false) { "sans titre".to_string() } else { t.title() };
-                format!("{}{name} — StudentCode", if t.dirty() { "* " } else { "" })
+                format!("{}{name} — SCode", if t.dirty() { "* " } else { "" })
             }
-            None => "Accueil — StudentCode".into(),
+            None => "Accueil — SCode".into(),
         };
         if title != self.title {
             self.title = title.clone();

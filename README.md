@@ -1,4 +1,6 @@
-# StudentCode
+# SCode
+
+*Anciennement StudentCode.*
 
 Un espace de travail pour étudiant en informatique sur Ubuntu : un IDE Python façon
 PyScripter, dans une interface à volets inspirée de VS Code et de LazyVim, où le code,
@@ -145,7 +147,7 @@ les mots-clés du langage. Complétion intelligente et débogueur pas à pas : P
 
 ## Session
 
-À la fermeture, StudentCode retient les volets, leurs tailles, les onglets ouverts (code, PDF,
+À la fermeture, SCode retient les volets, leurs tailles, les onglets ouverts (code, PDF,
 images, pages web) et la position du curseur ; tout est rouvert à l'identique au lancement suivant.
 Les fichiers ouverts depuis un lab SSH ne sont pas rouverts (il faut d'abord se reconnecter).
 
@@ -166,7 +168,7 @@ Les fichiers ouverts depuis un lab SSH ne sont pas rouverts (il faut d'abord se 
 - **Édition** : un fichier distant s'ouvre dans un onglet (marqué ⇄) ; Ctrl+S l'envoie sur la machine.
 - **F5** exécute le fichier sur la machine (sortie et `input()` dans l'onglet Sortie).
 - **Terminal SSH** dans le panneau du bas : un vrai terminal sur la machine (vim, nano, Tab).
-- **Nettoyage à la connexion** (automatique) : avant d'ouvrir la session, StudentCode ferme ce qui traîne
+- **Nettoyage à la connexion** (automatique) : avant d'ouvrir la session, SCode ferme ce qui traîne
   d'une séance précédente : tes anciennes sessions SSH, tes programmes encore en écoute sur un port (le
   serveur du TP qui bloque avec « Address already in use »), et tes programmes java (dont les démons Gradle),
   python, node… restés en arrière-plan. Jamais les services du système ni la connexion en cours. Pour le

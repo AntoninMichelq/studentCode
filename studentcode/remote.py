@@ -1,4 +1,4 @@
-"""Connexion SSH de StudentCode : labs enregistrés, explorateur distant,
+"""Connexion SSH de SCode : labs enregistrés, explorateur distant,
 édition et exécution sur la machine, console.
 
 Une seule connexion par lab (SFTP, exécution et console passent par le même
@@ -854,7 +854,7 @@ class RemotePanel(QWidget):
         lay.setSpacing(0)
         from sysinfo import FROZEN
         if not HAS_SSH and FROZEN:
-            msg = QLabel("Le module SSH manque dans cette version de StudentCode : réinstalle-la.")
+            msg = QLabel("Le module SSH manque dans cette version de SCode : réinstalle-la.")
             msg.setWordWrap(True)
             msg.setStyleSheet("padding: 10px;")
             lay.addWidget(msg)
@@ -901,7 +901,7 @@ class RemotePanel(QWidget):
         m.addSeparator()
         m.insertAction(m.actions()[0], self.a_rename)
         m.addAction(icon("key", YELLOW), "Oublier le mot de passe enregistré", self.forget_pw)
-        m.addAction(icon("terminal", GREEN), "Nouveau terminal SSH (dans StudentCode)", lambda: self.new_terminal())
+        m.addAction(icon("terminal", GREEN), "Nouveau terminal SSH (dans SCode)", lambda: self.new_terminal())
         m.addAction(icon("terminal", GREEN), "Ouvrir un terminal système sur ce lab", self.external_terminal)
         m.addSeparator()
         self.a_hidden = m.addAction("Afficher les fichiers cachés")
@@ -965,7 +965,7 @@ class RemotePanel(QWidget):
         self.install_btn.setText("Installation en cours…")
         p = QProcess(self)
         p.finished.connect(lambda *_: self.install_btn.setText(
-            "Installé : relance StudentCode pour activer SSH"))
+            "Installé : relance SCode pour activer SSH"))
         p.start(py[0], py[1:] + ["-m", "pip", "install", "paramiko", "keyring"])
 
     def set_status(self, text, col=FG):

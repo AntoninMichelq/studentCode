@@ -1,20 +1,22 @@
-# StudentCode (version Rust)
+# SCode (version Rust)
 
-Réécriture en Rust de StudentCode, pensée pour coûter le moins possible : une interface
+*Anciennement StudentCode.*
+
+Réécriture en Rust de StudentCode, renommé SCode, pensée pour coûter le moins possible : une interface
 native dessinée par la carte graphique, sans moteur web ni Python au démarrage.
 
 ## Installation
 
-**Windows** : `StudentCode-<version>-windows-x64-setup.exe`. L'installateur propose
+**Windows** : `SCode-<version>-windows-x64-setup.exe`. L'installateur propose
 « Complète » (PyScripter et lecteur PDF), « Minimale » (éditeur seul) ou « Personnalisée », et
 ajoute la commande `studentcode` aux terminaux.
 
 **Linux** :
 
 ```bash
-tar xzf StudentCode-*-linux-x86_64.tar.gz && cd StudentCode-*-linux-x86_64
+tar xzf SCode-*-linux-x86_64.tar.gz && cd SCode-*-linux-x86_64
 ./install.sh            # demande si on installe le module PyScripter
-studentcode .
+scode .
 ```
 
 `./install.sh --all` installe tout sans question, `./install.sh --minimal` seulement l'éditeur.
@@ -44,7 +46,7 @@ Tout se déplace aussi à la souris : glisser un onglet de fichier pour changer 
 autre volet ou vers le bord d'un volet pour le scinder ; glisser les onglets des panneaux ; clic
 droit sur les onglets d'un panneau pour le changer de côté ; clic droit sur la barre d'outils pour
 choisir les boutons. Les réglages sont dans `settings.json` (dossier de configuration de
-StudentCode).
+SCode).
 
 ## Modules
 

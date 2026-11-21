@@ -1,4 +1,4 @@
-"""Terminal intégré de StudentCode : un vrai terminal (couleurs, invite du shell,
+"""Terminal intégré de SCode : un vrai terminal (couleurs, invite du shell,
 vim, nano, complétion par Tab), pour le shell local comme pour la console SSH.
 
 L'émulation est faite par la bibliothèque pyte ; ce fichier dessine l'écran et
@@ -148,7 +148,7 @@ class TermWidget(QWidget):
         self.update()
 
     def say(self, text, color=COMMENT):
-        """Message de StudentCode affiché dans le terminal (une ligne colorée)."""
+        """Message de SCode affiché dans le terminal (une ligne colorée)."""
         self.feed((rgb_seq(color) + text.replace("\n", "\r\n") + "\x1b[0m\r\n").encode("utf-8"))
 
     def clear(self):
@@ -710,7 +710,7 @@ class LocalTerminal(QWidget):
         if not HAS_TERM:
             self.term = None
             lab = QLabel("Le module du terminal (pyte) n'est pas installé.\n"
-                         "Installe « pyte » depuis Bibliothèques, puis relance StudentCode.")
+                         "Installe « pyte » depuis Bibliothèques, puis relance SCode.")
             lab.setStyleSheet(f"color: {COMMENT}; padding: 10px;")
             lay.addWidget(lab)
             lay.addStretch(1)

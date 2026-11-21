@@ -58,9 +58,9 @@ echo "==> Lanceur et entrée de menu"
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
 # Si la version Rust est installée, elle garde la commande « studentcode » et l'entrée de menu
 # principale ; cette version-ci devient « studentcode-py » / « StudentCode (Python) ».
-CMD=studentcode; NAME=StudentCode; DESKTOP=studentcode.desktop
+CMD=studentcode; NAME=SCode; DESKTOP=studentcode.desktop
 if grep -q "studentcode-rs" "$HOME/.local/bin/studentcode" 2>/dev/null; then
-    CMD=studentcode-py; NAME="StudentCode (Python)"; DESKTOP=studentcode-py.desktop
+    CMD=studentcode-py; NAME="SCode (Python)"; DESKTOP=studentcode-py.desktop
 fi
 cat > "$HOME/.local/bin/$CMD" <<EOF
 #!/usr/bin/env bash
@@ -90,6 +90,6 @@ EOF
 update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 
 echo
-echo "Terminé. Lance StudentCode depuis le menu des applications, ou avec :"
+echo "Terminé. Lance SCode depuis le menu des applications, ou avec :"
 echo "    ~/.local/bin/studentcode"
 echo "    ~/.local/bin/studentcode mon_dossier/    pour ouvrir un projet"

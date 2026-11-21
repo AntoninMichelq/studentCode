@@ -313,7 +313,7 @@ impl App {
             }
         });
         ui.add_enabled_ui(session.map(|i| self.sessions[i].connected).unwrap_or(false), |ui| {
-            if icons::menu_item(ui, Icon::Terminal, p.green, "Nouveau terminal SSH (dans StudentCode)").clicked() {
+            if icons::menu_item(ui, Icon::Terminal, p.green, "Nouveau terminal SSH (dans SCode)").clicked() {
                 if let Some(i) = session { self.new_ssh_terminal(i, None); }
                 ui.close();
             }

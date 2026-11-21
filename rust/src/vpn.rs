@@ -232,7 +232,7 @@ fn conf_dir() -> PathBuf {
 #[cfg(windows)]
 pub fn available() -> Result<(), String> {
     gui().map(|_| ()).ok_or("OpenVPN GUI n'est pas installé : installe « OpenVPN Community » \
-        (https://openvpn.net/community-downloads/), puis relance StudentCode.".into())
+        (https://openvpn.net/community-downloads/), puis relance SCode.".into())
 }
 
 #[cfg(windows)]

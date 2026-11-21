@@ -1,4 +1,4 @@
-; Installateur Windows de StudentCode, version Rust (Inno Setup 6).
+; Installateur Windows de SCode (ex-StudentCode), version Rust (Inno Setup 6).
 ; iscc /DAppVersion=2.0.0 /DSrc=..\target\release packaging\studentcode.iss
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -9,17 +9,17 @@
 
 [Setup]
 AppId={{9E2F4C61-7B3A-4D58-A1C2-3F6B8E0D5A27}
-AppName=StudentCode
+AppName=SCode
 AppVersion={#AppVersion}
-AppPublisher=StudentCode
+AppPublisher=SCode
 AppPublisherURL=https://github.com/AntoninMichelq/studentCode
 DefaultDirName={localappdata}\Programs\StudentCode-rs
-DefaultGroupName=StudentCode
+DefaultGroupName=SCode
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=..\out
-OutputBaseFilename=StudentCode-{#AppVersion}-windows-x64-setup
+OutputBaseFilename=SCode-{#AppVersion}-windows-x64-setup
 SetupIconFile=icon.ico
 UninstallDisplayIcon={app}\studentcode.exe
 Compression=lzma2/max
@@ -51,6 +51,8 @@ Name: "addtopath"; Description: "Commande « studentcode » dans les terminaux (
 
 [Files]
 Source: "{#Src}\studentcode.exe"; DestDir: "{app}"; Components: core; Flags: ignoreversion
+Source: "icon.ico"; DestDir: "{app}"; Components: core; Flags: ignoreversion
+Source: "scode.cmd"; DestDir: "{app}"; Components: core; Flags: ignoreversion
 Source: "..\modules\pyscripter\*.py"; DestDir: "{app}\modules\pyscripter"; Components: pyscripter; Flags: ignoreversion
 Source: "..\modules\pdf\pdfium.dll"; DestDir: "{app}\modules\pdf"; Components: pdf; Flags: ignoreversion
 
@@ -58,14 +60,17 @@ Source: "..\modules\pdf\pdfium.dll"; DestDir: "{app}\modules\pdf"; Components: p
 ; si on réinstalle sans le module, l'ancien module est retiré
 Type: filesandordirs; Name: "{app}\modules\pyscripter"
 Type: filesandordirs; Name: "{app}\modules\pdf"
+; anciens raccourcis, d'avant le changement de nom (StudentCode → SCode)
+Type: files; Name: "{autodesktop}\StudentCode.lnk"
+Type: files; Name: "{autoprograms}\StudentCode\StudentCode.lnk"
 
 [Icons]
-Name: "{group}\StudentCode"; Filename: "{app}\studentcode.exe"
-Name: "{group}\Désinstaller StudentCode"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\StudentCode"; Filename: "{app}\studentcode.exe"; Tasks: desktopicon
+Name: "{group}\SCode"; Filename: "{app}\studentcode.exe"; IconFilename: "{app}\icon.ico"
+Name: "{group}\Désinstaller SCode"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\SCode"; Filename: "{app}\studentcode.exe"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\studentcode.exe"; Description: "{cm:LaunchProgram,StudentCode}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\studentcode.exe"; Description: "{cm:LaunchProgram,SCode}"; Flags: nowait postinstall skipifsilent
 
 [Registry]
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{app};{olddata}"; \
