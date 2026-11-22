@@ -1,5 +1,13 @@
 # StudentCode en Rust — journal des versions
 
+## 2.1.1
+
+- **Nouveau fichier** (Ctrl+N, bouton, menu, ␣fn) ne crée plus un .py d'office : une liste
+  propose le type (Python, C, C++, Java, JavaScript, HTML, Rust, Makefile, texte…), le dernier
+  choisi en premier. On peut aussi taper directement un nom (« main.c », « src/Test.java ») pour
+  créer le fichier dans le dossier ouvert.
+- « Enregistrer sous » propose le nom du fichier avec son extension.
+
 ## 2.1.0
 
 **Mode Vim, activé par défaut, avec les raccourcis de LazyVim.**

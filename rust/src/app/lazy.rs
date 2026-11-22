@@ -87,6 +87,15 @@ pub(crate) const KEYMAP: &[(&str, &str, L)] = &[
     ("w|", "Split Window Right", L::SplitRight),
 ];
 
+/// Types proposés par « Nouveau fichier » : (extension, nom). Une extension en majuscule est un
+/// nom de fichier complet (Makefile).
+pub(crate) const NEW_TYPES: &[(&str, &str)] = &[
+    ("py", "Python"), ("c", "C"), ("h", "En-tête C"), ("cpp", "C++"), ("hpp", "En-tête C++"), ("java", "Java"),
+    ("js", "JavaScript"), ("ts", "TypeScript"), ("html", "HTML"), ("css", "CSS"), ("php", "PHP"), ("rs", "Rust"),
+    ("go", "Go"), ("cs", "C#"), ("kt", "Kotlin"), ("sh", "Script shell"), ("sql", "SQL"), ("md", "Markdown"),
+    ("json", "JSON"), ("yml", "YAML"), ("xml", "XML"), ("Makefile", "Makefile"), ("txt", "Texte"), ("", "Sans extension"),
+];
+
 /// Ordre de which-key : chiffres, lettres (minuscule puis majuscule), puis signes.
 fn wk_order(c: char) -> (u8, char, bool) {
     if c.is_ascii_digit() { (0, c, false) } else if c.is_alphabetic() { (1, c.to_ascii_lowercase(), c.is_uppercase()) } else { (2, c, false) }
@@ -94,10 +103,10 @@ fn wk_order(c: char) -> (u8, char, bool) {
 
 // ---------------------------------------------------------------------- recherche (Telescope)
 #[derive(Clone, Copy, PartialEq)]
-pub(crate) enum PickKind { Files, Grep, Buffers, Recent, Themes, Harpoon, Keymaps }
+pub(crate) enum PickKind { Files, Grep, Buffers, Recent, Themes, Harpoon, Keymaps, NewFile }
 
 #[derive(Clone)]
-pub(crate) enum PickAct { Open(PathBuf, Option<usize>), Tab(u64), Theme(String), Leader(String) }
+pub(crate) enum PickAct { Open(PathBuf, Option<usize>), Tab(u64), Theme(String), Leader(String), NewUntitled(String), Create(PathBuf) }
 
 #[derive(Clone)]
 pub(crate) struct PItem { label: String, detail: String, act: PickAct }
@@ -193,6 +202,16 @@ impl App {
                 }
                 "Harpoon"
             }
+            PickKind::NewFile => {
+                let last = self.cfg.last_new_ext.clone();
+                let mut types: Vec<(&str, &str)> = NEW_TYPES.to_vec();
+                if let Some(k) = types.iter().position(|(e, _)| *e == last) { let t = types.remove(k); types.insert(0, t); }
+                for (ext, name) in types {
+                    let shown = if ext.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) || ext.is_empty() { (*name).to_string() } else { format!("{name}  (.{ext})") };
+                    items.push(PItem { label: shown, detail: String::new(), act: PickAct::NewUntitled(ext.to_string()) });
+                }
+                "Nouveau fichier : choisis le type, ou tape un nom (ex. main.c)"
+            }
             PickKind::Keymaps => {
                 for (k, d, _) in KEYMAP { items.push(PItem { label: format!("␣{}  {d}", k.replace(' ', "␣")), detail: String::new(), act: PickAct::Leader(k.to_string()) }); }
                 "Raccourcis leader"
@@ -204,6 +223,24 @@ impl App {
     }
 
     fn refilter(&self, p: &mut Picker) {
+        if p.kind == PickKind::NewFile {
+            // un nom de fichier tapé : le créer dans le dossier ouvert (en premier dans la liste)
+            p.items.retain(|it| !matches!(it.act, PickAct::Create(_)));
+            let q = p.query.trim();
+            let looks_like_file = q.contains('.') || q.eq_ignore_ascii_case("makefile") || q.contains('/');
+            if !q.is_empty() && looks_like_file && !q.ends_with('/') {
+                let path = if Path::new(q).is_absolute() { PathBuf::from(q) } else { self.root.join(q) };
+                let exists = path.exists();
+                p.items.insert(0, PItem {
+                    label: format!("{} « {q} »", if exists { "Ouvrir" } else { "Créer" }),
+                    detail: self.rel(&path).rsplit_once(['/', '\\']).map(|(d, _)| format!("dans {d}/")).unwrap_or_else(|| "dans le dossier ouvert".into()),
+                    act: if exists { PickAct::Open(path, None) } else { PickAct::Create(path) },
+                });
+                p.shown = std::iter::once(0).chain((1..p.items.len()).filter(|i| fuzzy(q.rsplit('.').next().unwrap_or(""), &p.items[*i].label).is_some() && !q.rsplit('.').next().unwrap_or("").is_empty())).collect();
+                p.sel = 0;
+                return;
+            }
+        }
         if p.kind == PickKind::Grep {
             if p.searched.as_deref() == Some(p.query.as_str()) { return; }
             p.searched = Some(p.query.clone());
@@ -316,6 +353,23 @@ impl App {
                 PickAct::Tab(uid) => { if let Some(i) = self.tabs.iter().position(|t| t.uid == uid) { self.activate(i); } }
                 PickAct::Theme(n) => self.set_theme(&n, ctx),
                 PickAct::Leader(k) => self.leader_run(&k, ctx),
+                PickAct::NewUntitled(ext) => {
+                    self.new_count += 1;
+                    self.add_tab(Content::Doc(crate::editor::Doc::untitled_as(self.new_count, "", &ext)));
+                    if self.cfg.last_new_ext != ext { self.cfg.last_new_ext = ext; self.cfg_dirty = true; }
+                }
+                PickAct::Create(path) => {
+                    if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
+                    match std::fs::write(&path, "") {
+                        Ok(()) => {
+                            if let Some(ext) = path.extension().map(|e| e.to_string_lossy().to_string()) {
+                                if NEW_TYPES.iter().any(|(e, _)| *e == ext) && self.cfg.last_new_ext != ext { self.cfg.last_new_ext = ext; self.cfg_dirty = true; }
+                            }
+                            self.open_file(&path);
+                        }
+                        Err(e) => self.say(format!("Impossible de créer {} : {e}", path.display()), self.p.red),
+                    }
+                }
             }
             return;
         }

@@ -19,6 +19,8 @@ pub struct Settings {
     pub toolbar_order: Vec<String>,
     /// boutons masqués de la barre d'outils (identifiants)
     pub toolbar_hidden: Vec<String>,
+    /// type du dernier « Nouveau fichier » (proposé en premier)
+    pub last_new_ext: String,
     // --- disposition
     pub side_right: bool,
     pub bottom_right: bool,
@@ -80,6 +82,7 @@ impl Default for Settings {
             show_statusbar: true,
             toolbar_order: TOOLBAR_DEFAULT.iter().map(|s| s.to_string()).collect(),
             toolbar_hidden: vec!["open_file".into(), "save_all".into(), "settings".into()],
+            last_new_ext: "py".into(),
             side_right: false,
             bottom_right: false,
             debug_left: false,

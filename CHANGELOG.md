@@ -1,5 +1,9 @@
 # Journal des versions
 
+## 1.1.7
+
+- Nouveau fichier (Ctrl+N) : choix du type (Python, C, Java, HTML, Makefile…) au lieu d'un .py d'office ; le dernier type choisi est proposé en premier.
+
 ## 1.1.6
 
 - **StudentCode s'appelle maintenant SCode** (titre de la fenêtre, menus, raccourcis, installateur). Les réglages, labs et sessions sont gardés.

@@ -13,7 +13,7 @@ import shutil
 import sys
 import threading
 
-__version__ = "1.1.6"
+__version__ = "1.1.7"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sysinfo import (APP_DIR, FROZEN, PYTHON_MISSING, WINDOWS, child_env, prepare_children, python_cmd,
                      python_exe, quote, restart_cmd, shell_cmd)
@@ -363,18 +363,22 @@ class Editor(QsciScintilla):
         self.SendScintilla(B.SCI_SETFOLDFLAGS, 0)  # pas de trait sous un bloc replié
 
     # ------------------------------------------------------------- lexer
+    def lang_name(self):
+        """Nom qui décide du langage : le fichier, ou le nom provisoire d'un fichier sans nom."""
+        return self.path or getattr(self, "untitled_name", None) or "x.py"
+
     def is_python(self):
-        return self.path is None or self.path.endswith((".py", ".pyw", ".pyi"))
+        return self.lang_name().endswith((".py", ".pyw", ".pyi"))
 
     def ext(self):
-        return os.path.splitext(self.path or "x.py")[1].lower()
+        return os.path.splitext(self.lang_name())[1].lower()
 
     def comment_prefix(self):
-        marks = langs.comment_marks(self.path)
+        marks = langs.comment_marks(self.lang_name())
         return marks[0] if marks else ""
 
     def apply_lexer(self):
-        key = langs.detect(self.path) if not self.is_python() else None
+        key = langs.detect(self.lang_name()) if not self.is_python() else None
         if key:   # C, Java, Gradle, Kotlin, HTML, YAML, SQL… : coloration aux couleurs du thème
             lx = langs.theme_lexer(langs.make_lexer(key, self), self.win.code_font, theme.P)
             self.setLexer(lx)
@@ -1827,7 +1831,7 @@ class MainWindow(QMainWindow):
             return a
 
         A = self.a = {}
-        A["new"] = act("Nouveau fichier", lambda: self.new_file(), "Ctrl+N")
+        A["new"] = act("Nouveau fichier…", lambda: self.ask_new_file(), "Ctrl+N")
         A["open"] = act("Ouvrir un fichier…", self.open_dialog, "Ctrl+O")
         A["folder"] = act("Ouvrir un dossier…", self.open_folder, "Ctrl+Shift+O")
         A["save"] = act("Enregistrer", lambda: self.save(), "Ctrl+S")
@@ -2580,10 +2584,34 @@ class MainWindow(QMainWindow):
             pane.setTabToolTip(i, ("SSH " + ed.remote_name + " : " + ed.remote) if ed.remote else (ed.path or ""))
             pane.setTabIcon(i, file_icon(ed.path or "x.py"))
 
-    def new_file(self, text=""):
+    NEW_TYPES = [("py", "Python"), ("c", "C"), ("h", "En-tête C"), ("cpp", "C++"), ("hpp", "En-tête C++"),
+                 ("java", "Java"), ("js", "JavaScript"), ("ts", "TypeScript"), ("html", "HTML"), ("css", "CSS"),
+                 ("php", "PHP"), ("rs", "Rust"), ("go", "Go"), ("cs", "C#"), ("kt", "Kotlin"), ("sh", "Script shell"),
+                 ("sql", "SQL"), ("md", "Markdown"), ("json", "JSON"), ("yml", "YAML"), ("xml", "XML"),
+                 ("Makefile", "Makefile"), ("txt", "Texte"), ("", "Sans extension")]
+
+    def ask_new_file(self):
+        """Nouveau fichier : choisir le type (le dernier choisi est proposé en premier)."""
+        last = self.settings.value("new_ext", "py")
+        types = sorted(self.NEW_TYPES, key=lambda t: t[0] != last)
+        labels = [n if (not e or e[0].isupper()) else f"{n}  (.{e})" for e, n in types]
+        choice, ok = QInputDialog.getItem(self, "Nouveau fichier", "Type de fichier :", labels, 0, False)
+        if not ok:
+            return None
+        ext = types[labels.index(choice)][0]
+        self.settings.setValue("new_ext", ext)
+        return self.new_file(ext=ext)
+
+    def new_file(self, text="", ext="py"):
         self.untitled += 1
         ed = Editor(self)
-        title = f"sans_titre_{self.untitled}.py"
+        if ext and ext[0].isupper():
+            title = ext
+        else:
+            title = f"sans_titre_{self.untitled}" + (f".{ext}" if ext else "")
+        ed.untitled_name = title
+        if ext != "py":
+            ed.apply_lexer()
         ed.setProperty("title", title)
         ed.setText(text or "")
         ed.setModified(False)

@@ -1512,7 +1512,7 @@ impl App {
         use crate::settings::Action as A;
         let stopped = self.dbg.is_some() && !self.frames.is_empty();
         match a {
-            A::New => self.new_doc(),
+            A::New => self.open_picker(lazy::PickKind::NewFile, ""),
             A::OpenFile => { if let Some(f) = rfd::FileDialog::new().set_directory(&self.root).pick_file() { self.open_file(&f); } }
             A::OpenFolder => self.open_folder_dialog(),
             A::Save => { if let Some(i) = self.cur() { self.save_tab(i); } }
@@ -1596,7 +1596,8 @@ impl App {
     fn save_as(&mut self) {
         if let Some(i) = self.cur() {
             if self.tabs[i].doc().is_none() { return; }
-            if let Some(f) = rfd::FileDialog::new().set_directory(&self.root).save_file() {
+            let name = self.tabs[i].title();
+            if let Some(f) = rfd::FileDialog::new().set_directory(&self.root).set_file_name(&name).save_file() {
                 if let Some(d) = self.tabs[i].doc_mut() { d.remote = None; d.untitled = 0; let r = d.save_as(f); self.report_save(r); }
             }
         }
@@ -1672,7 +1673,7 @@ impl eframe::App for App {
         let title = match self.cur() {
             Some(i) => {
                 let t = &self.tabs[i];
-                let name = if t.doc().map(|d| d.untitled > 0).unwrap_or(false) { "sans titre".to_string() } else { t.title() };
+                let name = t.title();
                 format!("{}{name} — SCode", if t.dirty() { "* " } else { "" })
             }
             None => "Accueil — SCode".into(),

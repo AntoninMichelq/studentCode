@@ -31,6 +31,8 @@ pub struct Doc {
     pub remote: Option<(String, String, String)>,
     /// numéro du fichier sans nom (« sans_titre_1.py »), 0 pour un vrai fichier
     pub untitled: usize,
+    /// extension du fichier sans nom (« py », « c »…)
+    pub untitled_ext: String,
     /// blocs repliés (ligne d'en-tête, à partir de 1)
     pub folded: BTreeSet<usize>,
     /// blocs repliables : (hash du texte, [(en-tête, dernière ligne)])
@@ -75,15 +77,21 @@ impl Doc {
             path: None, text: String::new(), saved_hash: hash(""), lang: Lang::Plain,
             id: egui::Id::new(("doc", n, std::time::SystemTime::now())), cache: None, last_galley: None,
             breakpoints: BTreeSet::new(), goto: None, cursor_line: 1, cursor_col: 1, find: None, find_next: false,
-            remote: None, untitled: n, folded: BTreeSet::new(), folds: None, lines_before: 0, pending_comment: false, pending_duplicate: false, pending_edit: None, want_focus: false, last_sel: None, find_back: false, replace_with: None,
+            remote: None, untitled: n, untitled_ext: "py".into(), folded: BTreeSet::new(), folds: None, lines_before: 0, pending_comment: false, pending_duplicate: false, pending_edit: None, want_focus: false, last_sel: None, find_back: false, replace_with: None,
             vim: crate::vim::Vim::new(), vim_hl: None, vim_set: None, vim_scroll: None, vim_cur: 0, vim_anchor: 0,
         }
     }
 
     /// Nouveau fichier Python sans nom (comme la version Python : « sans_titre_N.py »).
     pub fn untitled(n: usize, text: &str) -> Doc {
+        Doc::untitled_as(n, text, "py")
+    }
+
+    /// Fichier sans nom d'un type donné (« c », « java »… ; « Makefile » pour un Makefile).
+    pub fn untitled_as(n: usize, text: &str, ext: &str) -> Doc {
         let mut d = Doc::new_empty(n);
-        d.lang = Lang::Python;
+        d.untitled_ext = ext.to_string();
+        d.lang = Lang::detect(&d.title());
         d.text = text.to_string();
         d.saved_hash = hash(text);
         d
@@ -131,7 +139,11 @@ impl Doc {
             return p.rsplit('/').next().unwrap_or(p).to_string();
         }
         self.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| if self.untitled > 0 { format!("sans_titre_{}.py", self.untitled) } else { "sans titre".into() })
+            .unwrap_or_else(|| if self.untitled > 0 {
+                if self.untitled_ext.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) { self.untitled_ext.clone() }
+                else if self.untitled_ext.is_empty() { format!("sans_titre_{}", self.untitled) }
+                else { format!("sans_titre_{}.{}", self.untitled, self.untitled_ext) }
+            } else { "sans titre".into() })
     }
 
     /// Enlève les espaces en fin de ligne (option des Paramètres, en enregistrant).
