@@ -35,6 +35,8 @@ pub struct Terminal {
     started: bool,
     /// le terminal a le clavier : les raccourcis de l'app (Ctrl+W, Ctrl+B…) lui sont laissés
     pub focused: bool,
+    /// prendre le clavier au prochain dessin (␣ft, Ctrl+/ de LazyVim)
+    pub want_focus: bool,
     pub error: Arc<Mutex<Option<String>>>,
 }
 
@@ -110,6 +112,7 @@ impl Terminal {
             kind: Kind::Local,
             started: false,
             focused: false,
+            want_focus: false,
             error: Arc::new(Mutex::new(None)),
         }
     }
@@ -343,7 +346,7 @@ impl Terminal {
         self.resize(rows, cols);
         let (rect, resp) = ui.allocate_exact_size(avail, Sense::click_and_drag());
         let id = resp.id;
-        if resp.clicked() || resp.drag_started() {
+        if resp.clicked() || resp.drag_started() || std::mem::take(&mut self.want_focus) {
             resp.request_focus();
         }
         let focused = resp.has_focus();

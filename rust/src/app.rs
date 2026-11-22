@@ -21,6 +21,7 @@ mod panes;
 mod side;
 mod ui;
 mod prefs;
+mod lazy;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const URCA: &str = "https://cours.univ-reims.fr/local/mycoursesurca/courses.php";
@@ -52,6 +53,10 @@ struct SessionFile {
     run_args: String,
     bookmarks: Vec<(String, String)>,
     side: u8,
+    /// Harpoon : fichiers marqués, par dossier ouvert
+    harpoon: BTreeMap<String, Vec<PathBuf>>,
+    /// fichiers ouverts récemment (␣fr)
+    recent_files: Vec<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -284,6 +289,20 @@ pub struct App {
     /// action dont on attend le nouveau raccourci
     key_capture: Option<crate::settings::Action>,
     menu_request: bool,
+    /// touche leader de LazyVim en cours : (touches tapées après Espace, moment)
+    pub(crate) leader: Option<(String, Instant)>,
+    pub(crate) leader_pending: Vec<char>,
+    pub(crate) picker: Option<lazy::Picker>,
+    pub(crate) harpoon: BTreeMap<String, Vec<PathBuf>>,
+    pub(crate) recent_files: Vec<PathBuf>,
+    /// mode zen (␣uz) : panneaux à remettre
+    pub(crate) zen: Option<(bool, bool)>,
+    /// onglet affiché avant le courant (␣`)
+    pub(crate) prev_tab: Option<u64>,
+    /// donner le clavier au terminal affiché
+    pub(crate) focus_terminal: bool,
+    /// demandes de Vim à faire après le dessin des volets
+    pub(crate) vim_queue: Vec<(Vec<crate::vim::Out>, Vec<crate::vim::K>)>,
     /// fin de programme à annoncer (code, suite de la sortie, moment)
     pending_end: Option<(String, String, Instant)>,
     /// points d'arrêt de la session (fichiers ouverts ou non)
@@ -385,7 +404,7 @@ impl App {
             find_text: String::new(), replace_text: String::new(), find_info: String::new(), dialog: None,
             status: None, recent: sess.recent.clone(), run_args: sess.run_args.clone(), allow_quit: false,
             title: String::new(), new_count: 0, ctx: cc.egui_ctx.clone(), logo: None,
-            labs: ssh::load_labs(), sessions: Vec::new(), ssh_sel: 0, ssh_new: false, cfg, settings_open: false, settings_page: 0, key_capture: None, menu_request: false, pending_end: None, bp_store: BTreeMap::new(), autosave_tab: None, autosave_focus: true, cfg_dirty: false, last_edit: None, dbg_eval: String::new(), ssh_hidden: false, start_url: String::new(), libs_open: false, quick: String::new(), diag: None,
+            labs: ssh::load_labs(), sessions: Vec::new(), ssh_sel: 0, ssh_new: false, cfg, settings_open: false, settings_page: 0, key_capture: None, menu_request: false, leader: None, leader_pending: Vec::new(), picker: None, harpoon: BTreeMap::new(), recent_files: Vec::new(), zen: None, prev_tab: None, focus_terminal: false, vim_queue: Vec::new(), pending_end: None, bp_store: BTreeMap::new(), autosave_tab: None, autosave_focus: true, cfg_dirty: false, last_edit: None, dbg_eval: String::new(), ssh_hidden: false, start_url: String::new(), libs_open: false, quick: String::new(), diag: None,
             vpns: Vec::new(), vpn_sel: None, vpn_list: None, vpn_job: None, vpn_status: String::new(),
             vpn_creds: HashMap::new(), vpn_refreshed: None,
             bookmarks: if sess.bookmarks.is_empty() { default_bookmarks() } else { sess.bookmarks.clone() },
@@ -393,6 +412,8 @@ impl App {
             pkg_busy: false, pkg_loaded: false, pane_ops: Vec::new(), session_sig: 0, pending_saves: HashMap::new(),
         };
         app.bp_store = sess.breakpoints.clone();
+        app.harpoon = sess.harpoon.clone();
+        app.recent_files = sess.recent_files.clone();
         app.explorer.expanded = sess.expanded.iter().cloned().collect();
         // « studentcode . » dans le dossier de la dernière séance : on retrouve ses fichiers ouverts
         let arg = match arg {
@@ -482,6 +503,8 @@ impl App {
             run_args: self.run_args.clone(),
             bookmarks: self.bookmarks.clone(),
             side: match self.side { SideTab::Files => 0, SideTab::Ssh => 1, SideTab::Vpn => 2 },
+            harpoon: self.harpoon.clone(),
+            recent_files: self.recent_files.clone(),
         };
         if let Ok(j) = serde_json::to_string_pretty(&s) {
             let _ = std::fs::write(dir.join("session.json"), j);
@@ -564,6 +587,7 @@ impl App {
 
     fn activate(&mut self, i: usize) {
         let (pane, uid) = (self.tabs[i].pane, self.tabs[i].uid);
+        if let Some(old) = self.pane_active.get(&self.focus_pane).copied() { if old != uid { self.prev_tab = Some(old); } }
         self.pane_active.insert(pane, uid);
         self.focus_pane = pane;
         // le clavier va au fichier qu'on vient de choisir
@@ -609,6 +633,9 @@ impl App {
             }
         };
         self.add_tab(content);
+        self.recent_files.retain(|p| p != path);
+        self.recent_files.insert(0, path.to_path_buf());
+        self.recent_files.truncate(60);
     }
 
     fn new_doc(&mut self) {
@@ -1451,13 +1478,25 @@ impl App {
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if self.key_capture.is_some() { return; } // la fenêtre Paramètres attend une touche
         if self.dialog.is_some() { return; } // une petite fenêtre (aller à la ligne, mot de passe…) a le clavier
+        if self.picker.is_some() || self.leader.is_some() { return; }
         let in_term = self.shown_term().map(|t| t.focused).unwrap_or(false) && self.show_bottom;
         let mut todo = Vec::new();
         let editor_focus = self.cur().and_then(|i| self.tabs[i].doc()).map(|d| d.has_focus(ctx)).unwrap_or(false);
+        // mode Vim (hors insertion) : Ctrl+d/u/r/h/j/k/l et Ctrl+/ sont à Vim et LazyVim
+        let vim_keys = self.cfg.vim_mode && editor_focus
+            && self.cur().and_then(|i| self.tabs[i].doc()).map(|d| d.vim.mode != crate::vim::Mode::Insert).unwrap_or(false);
+        // Ctrl+/ dans le terminal : le masquer et revenir au code (LazyVim)
+        if self.cfg.vim_mode && in_term && crate::settings::pressed(ctx, &crate::settings::Shortcut { ctrl: true, shift: false, alt: false, key: Key::Slash }) {
+            self.show_bottom = false;
+            if let Some(d) = self.cur_doc() { d.want_focus = true; }
+            return;
+        }
         for a in crate::settings::ACTIONS {
             if in_term && !a.works_in_terminal() { continue; }
             if a.needs_editor() && !editor_focus { continue; }
             for sc in self.cfg.shortcuts(*a) {
+                if vim_keys && sc.ctrl && !sc.alt && !sc.shift
+                    && matches!(sc.key, Key::D | Key::U | Key::R | Key::H | Key::J | Key::K | Key::L | Key::Slash | Key::Colon | Key::OpenBracket) { continue; }
                 if crate::settings::pressed(ctx, &sc) { todo.push(*a); break; }
             }
         }
@@ -1545,6 +1584,11 @@ impl App {
             A::Ssh => { self.show_explorer = true; self.side = SideTab::Ssh; }
             A::Vpn => { self.show_explorer = true; self.side = SideTab::Vpn; self.refresh_vpns(); }
             A::Settings => self.settings_open = !self.settings_open,
+            A::ToggleVim => {
+                self.cfg.vim_mode = !self.cfg.vim_mode;
+                self.cfg_dirty = true;
+                self.say(if self.cfg.vim_mode { "Mode Vim activé (Échap : mode Normal, i : insertion, Espace : raccourcis)" } else { "Mode Vim désactivé" }, self.p.blue);
+            }
             A::Menu => self.menu_request = true,
         }
     }
@@ -1614,7 +1658,16 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         self.poll();
         if self.pending_end.is_some() { ctx.request_repaint_after(Duration::from_millis(40)); }
+        self.leader_input(&ctx);
         self.shortcuts(&ctx);
+        if std::mem::take(&mut self.focus_terminal) {
+            match self.bottom {
+                Bottom::Terminal(n) => { if let Some(t) = self.terms.get_mut(n) { t.want_focus = true; } }
+                Bottom::Ssh(i, n) => { if let Some(t) = self.sessions.get_mut(i).and_then(|s| s.terms.get_mut(n)) { t.want_focus = true; } }
+                Bottom::Repl => self.repl_term.want_focus = true,
+                _ => { self.bottom = Bottom::Terminal(0); if let Some(t) = self.terms.get_mut(0) { t.want_focus = true; } }
+            }
+        }
         self.window_edges(&ctx);
         let title = match self.cur() {
             Some(i) => {
@@ -1694,7 +1747,10 @@ impl eframe::App for App {
                 .show(&ctx, |ui| self.libs_panel(ui));
             self.libs_open = open;
         }
+        for (o, k) in std::mem::take(&mut self.vim_queue) { self.vim_events(o, k, &ctx); }
         self.settings_window(&ctx);
+        self.picker_window(&ctx);
+        self.which_key(&ctx);
         self.dialogs(&ctx);
         if ctx.input(|i| i.pointer.any_released()) { self.drag_tab = None; }
         if self.cfg_dirty && !ctx.input(|i| i.pointer.any_down()) {

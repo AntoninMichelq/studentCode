@@ -13,6 +13,7 @@ mod pdf;
 mod pip;
 mod secrets;
 mod settings;
+mod vim;
 mod clip;
 mod ssh;
 mod vpn;

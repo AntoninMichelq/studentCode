@@ -404,6 +404,7 @@ impl App {
             if icons::menu_check(ui, self.cfg.side_right, "Panneau latéral à droite", "").clicked() { self.cfg.side_right = !self.cfg.side_right; self.cfg_dirty = true; ui.close(); }
             if icons::menu_check(ui, self.cfg.bottom_right, "Panneau du bas à droite", "").clicked() { self.cfg.bottom_right = !self.cfg.bottom_right; self.cfg_dirty = true; ui.close(); }
             if icons::menu_check(ui, self.cfg.debug_left, "Débogage à gauche", "").clicked() { self.cfg.debug_left = !self.cfg.debug_left; self.cfg_dirty = true; ui.close(); }
+            if icons::menu_check(ui, self.cfg.vim_mode, "Mode Vim (raccourcis LazyVim)", &keys["toggle_vim"]).clicked() { self.cfg.vim_mode = !self.cfg.vim_mode; self.cfg_dirty = true; ui.close(); }
             if icons::menu_check(ui, self.cfg.show_statusbar, "Barre d'état", "").clicked() { self.cfg.show_statusbar = !self.cfg.show_statusbar; self.cfg_dirty = true; ui.close(); }
             ui.separator();
             ui.menu_button("Thème", |ui| {
@@ -447,11 +448,17 @@ impl App {
                 let f = FontId::proportional(13.3);
                 let bold = FontId::new(13.3, egui::FontFamily::Name("bold".into()));
                 let width = |ui: &egui::Ui, t: &str, font: &FontId| ui.fonts_mut(|fo| fo.layout_no_wrap(t.to_string(), font.clone(), p.fg)).size().x;
-                // bloc du mode (la version Python affiche « EDITION »)
-                let mode = "EDITION";
+                // bloc du mode : NORMAL / INSERT / VISUAL / COMMAND en mode Vim (couleurs de lualine),
+                // « EDITION » sinon
+                let vim = if self.cfg.vim_mode { self.cur().and_then(|i| self.tabs[i].doc()).map(|d| (d.vim.mode, d.vim.cmdline.is_some())) } else { None };
+                let (mode, mcol) = match vim {
+                    Some((_, true)) => ("COMMAND", p.orange),
+                    Some((m, _)) => (m.name(), match m { crate::vim::Mode::Normal => p.blue, crate::vim::Mode::Insert => p.green, _ => p.magenta }),
+                    None => ("EDITION", p.blue),
+                };
                 let mw = width(ui, mode, &bold) + 2.0 * 8.0;
                 let mr = Rect::from_min_size(egui::pos2(full.min.x + 7.0, cy - 8.5), Vec2::new(mw, 17.0));
-                ui.painter().rect_filled(mr, 0.0, p.blue);
+                ui.painter().rect_filled(mr, 0.0, mcol);
                 ui.painter().text(mr.center(), Align2::CENTER_CENTER, mode, bold.clone(), p.bg_dark);
                 let mut x = mr.max.x + 6.0;
                 // état de l'exécution, comme la version Python (« ▶ en cours », « ⏸ débogage : à l'arrêt »…)

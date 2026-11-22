@@ -1,6 +1,28 @@
 # StudentCode en Rust — journal des versions
 
-## 2.0.4
+## 2.1.0
+
+**Mode Vim, activé par défaut, avec les raccourcis de LazyVim.**
+
+- Modes Normal, Insertion, Visuel et Visuel-ligne, curseur bloc, mode affiché dans la barre
+  d'état (NORMAL, INSERT, VISUAL, COMMAND), numéros de ligne relatifs.
+- Mouvements (h j k l, w b e, 0 ^ $, gg G, f t ; ,, %, { }, Ctrl+d / Ctrl+u), opérateurs (d c y
+  > < gc gu gU g~) avec compteurs et objets de texte (iw aw, i( a(, i{, i[, i" i', ip…),
+  x s r J ~ p P, u / Ctrl+r, « . », recherche / ? n N * #, gcc pour commenter, Alt+j / Alt+k pour
+  déplacer les lignes. Le copier-coller passe par le presse-papiers du système, comme LazyVim.
+- Commandes « : » : :w :q :wq :x :q! :qa :wa :e fichier :e! :sp :vs :bn :bp :bd :enew :term
+  :set (nu, rnu, wrap) :colorscheme, :12 pour aller à une ligne, :s/a/b/g, :%s/…/…/g.
+- **Espace (leader)** ouvre la fenêtre des raccourcis, comme which-key : ␣␣ fichiers, ␣/ grep,
+  ␣, onglets, ␣e explorateur, ␣- ␣| scinder, ␣ff ␣fr ␣fn ␣fc, ␣bd ␣bo, ␣d… débogage (␣db point
+  d'arrêt, ␣dc continuer, ␣di ␣dO ␣do pas à pas, ␣dt arrêter), ␣u… interface (␣uw ␣ul ␣uL ␣uC
+  ␣ub ␣uz), ␣w… volets, ␣gg lazygit, ␣qq quitter, ␣sk liste des raccourcis.
+- **Harpoon** : ␣H marque le fichier, ␣1 à ␣9 y retournent, ␣h ouvre la liste.
+- Recherche façon Telescope (fichiers, texte dans le projet, onglets, récents, thèmes).
+- Hors leader : H / L onglet précédent / suivant, Ctrl+h/j/k/l changer de volet, Ctrl+/
+  terminal (et retour au code), Ctrl+S enregistre dans tous les modes.
+- Désactivable : Paramètres → Éditeur, menu Affichage, ou Ctrl+Alt+V.
+
+**Aussi dans cette version** (la 2.0.4 n'a pas été publiée) :
 
 - **StudentCode s'appelle maintenant SCode** : fenêtre, menus, installateurs, raccourcis du
   bureau et du menu Démarrer, fichiers à télécharger (`SCode-…`). Nouvelle commande `scode .`
@@ -16,7 +38,7 @@
 - **Ctrl+G** et les petites fenêtres (nouveau fichier, renommer, mot de passe…) prennent le
   clavier tout de suite : ce qu'on tapait partait dans le code et pouvait remplacer la sélection.
   Échap les ferme, et les raccourcis sont en pause tant qu'elles sont ouvertes.
-- **Nouvelle icône** : un « S » vide, juste son contour, sur une tuile blanche. Elle est
+- **Nouvelle icône** : un « S » vide, juste son contour, avec le curseur « _ » d’un terminal, sur une tuile papier encadrée. Elle est
   maintenant intégrée au programme sous Windows (explorateur, barre des tâches, raccourcis), et
   Ubuntu affiche la nouvelle sans garder l'ancienne en cache.
 

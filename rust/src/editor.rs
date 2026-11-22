@@ -50,6 +50,17 @@ pub struct Doc {
     pub find_back: bool,
     /// « Remplacer » : remplace l'occurrence sélectionnée par ce texte puis passe à la suivante
     pub replace_with: Option<String>,
+    /// mode Vim (comme LazyVim)
+    pub vim: crate::vim::Vim,
+    /// texte surligné par la recherche Vim (/, *, n)
+    pub vim_hl: Option<String>,
+    /// curseur posé par Vim à l'image précédente (pour reconnaître un clic de souris)
+    vim_set: Option<CCursorRange>,
+    /// faire défiler pour garder le curseur Vim visible (4 lignes de marge, comme LazyVim)
+    vim_scroll: Option<char>,
+    /// position du curseur Vim (caractères)
+    pub vim_cur: usize,
+    vim_anchor: usize,
 }
 
 fn hash(s: &str) -> u64 {
@@ -65,6 +76,7 @@ impl Doc {
             id: egui::Id::new(("doc", n, std::time::SystemTime::now())), cache: None, last_galley: None,
             breakpoints: BTreeSet::new(), goto: None, cursor_line: 1, cursor_col: 1, find: None, find_next: false,
             remote: None, untitled: n, folded: BTreeSet::new(), folds: None, lines_before: 0, pending_comment: false, pending_duplicate: false, pending_edit: None, want_focus: false, last_sel: None, find_back: false, replace_with: None,
+            vim: crate::vim::Vim::new(), vim_hl: None, vim_set: None, vim_scroll: None, vim_cur: 0, vim_anchor: 0,
         }
     }
 
@@ -260,8 +272,15 @@ impl Doc {
             }
         }
         let focused = ui.memory(|m| m.has_focus(te_id));
+        if !o.vim && self.vim.mode != crate::vim::Mode::Insert { self.vim = crate::vim::Vim::new(); self.vim.mode = crate::vim::Mode::Insert; }
+        if o.vim && self.vim.mode == crate::vim::Mode::Insert && self.vim_set.is_none() && !focused { self.vim.mode = crate::vim::Mode::Normal; }
+        if o.vim && focused {
+            let page = (ui.available_height() / row_h).max(4.0) as usize;
+            self.vim_input(ui, te_id, o, page, &mut events);
+        }
+        let vim_normal = o.vim && self.vim.mode != crate::vim::Mode::Insert;
         if focused || self.pending_comment || self.pending_duplicate {
-            self.handle_keys(ui, te_id, o);
+            if !vim_normal || self.pending_comment || self.pending_duplicate { self.handle_keys(ui, te_id, o); }
         }
         // recherche : sélectionner l'occurrence suivante
         let mut scroll_to: Option<usize> = self.goto.take();
@@ -345,6 +364,8 @@ impl Doc {
             }).collect()
         };
         let bg_slot_holder: std::cell::Cell<Option<egui::layers::ShapeIdx>> = std::cell::Cell::new(None);
+        let vim_scroll = self.vim_scroll.take();
+        let vim_on = o.vim;
         let out = sa.show(&mut child, |ui| {
             bg_slot_holder.set(Some(ui.painter().add(Shape::Noop)));
             let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap: f32| -> Arc<Galley> {
@@ -368,7 +389,8 @@ impl Doc {
                 *last = Some(g.clone());
                 g
             };
-            TextEdit::multiline(&mut self.text)
+            if vim_normal { ui.visuals_mut().text_cursor.stroke.width = 0.0; }
+            let r = TextEdit::multiline(&mut self.text)
                 .id(te_id)
                 .font(font.clone())
                 .code_editor()
@@ -378,7 +400,24 @@ impl Doc {
                 .desired_rows((text_rect.height() / row_h) as usize)
                 .lock_focus(true)
                 .layouter(&mut layouter)
-                .show(ui)
+                .show(ui);
+            // mode Vim : Échap est pour Vim (egui retirerait sinon le clavier à l'éditeur)
+            if vim_on && r.response.response.has_focus() {
+                ui.memory_mut(|m| m.set_focus_lock_filter(te_id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true }));
+            }
+            // Vim a bougé le curseur : le garder visible avec 4 lignes de marge (scrolloff de LazyVim)
+            if let (Some(how), Some(cr)) = (vim_scroll, r.cursor_range) {
+                let c = r.galley.pos_from_cursor(cr.primary);
+                let rect = c.translate(r.galley_pos.to_vec2());
+                let rect = match how {
+                    'z' => rect.expand2(Vec2::new(0.0, ui.clip_rect().height() / 2.0 - row_h)),
+                    't' => Rect::from_min_size(rect.min, Vec2::new(rect.width(), ui.clip_rect().height() - row_h)),
+                    'b' => Rect::from_min_max(rect.max - Vec2::new(rect.width(), ui.clip_rect().height() - row_h), rect.max),
+                    _ => rect.expand2(Vec2::new(0.0, row_h * 4.0)),
+                };
+                ui.scroll_to_rect(rect, None);
+            }
+            r
         });
         let te = out.inner;
         let offset = out.state.clamped_offset();
@@ -474,7 +513,23 @@ impl Doc {
         if let Some(l) = debug_line {
             bg_shapes.push(Shape::rect_filled(line_rect(l), 0.0, p.curline));
         }
-        if let Some(q) = self.find.as_ref().filter(|q| q.chars().count() >= 2) {
+        // curseur bloc de Vim (modes Normal et Visuel)
+        if vim_normal && ui.memory(|m| m.has_focus(te_id)) {
+            let ci = self.vim_cur.min(self.text.chars().count());
+            let r0 = te.galley.pos_from_cursor(CCursor::new(CharIndex(ci)));
+            let next = self.text.chars().nth(ci);
+            let w = match next {
+                Some(c) if c != '\n' => {
+                    let r1 = te.galley.pos_from_cursor(CCursor::new(CharIndex(ci + 1)));
+                    if (r1.min.y - r0.min.y).abs() < 1.0 { (r1.min.x - r0.min.x).max(cw * 0.5) } else { cw }
+                }
+                _ => cw,
+            };
+            let rr = Rect::from_min_size(galley_pos + r0.min.to_vec2(), Vec2::new(w, r0.height()));
+            bg_shapes.push(Shape::rect_filled(rr, 1.0, p.blue.gamma_multiply(if p.light { 0.45 } else { 0.6 })));
+        }
+        let hl = self.find.clone().filter(|q| q.chars().count() >= 2).or_else(|| if o.vim { self.vim_hl.clone().filter(|q| !q.is_empty()) } else { None });
+        if let Some(q) = hl.as_ref() {
             let hits = find_all_ci(&self.text, q, 2001);
             let count = hits.len();
             for (b, be) in hits.into_iter().take(2000) {
@@ -508,8 +563,11 @@ impl Doc {
             if y > gutter_rect.max.y { break; }
             let cy = y + row_h.min(rh) / 2.0;
             if o.line_numbers {
+                // numéros relatifs (LazyVim) : distance au curseur, numéro réel sur la ligne du curseur
+                let here = line == self.cursor_line;
+                let txt = if o.relative_numbers && !here { line.abs_diff(self.cursor_line).to_string() } else { line.to_string() };
                 painter.text(egui::pos2(gutter_rect.min.x + num_w - 4.0, y + row_h.min(rh) / 2.0), egui::Align2::RIGHT_CENTER,
-                             line.to_string(), font.clone(), p.gutter);
+                             txt, font.clone(), if here && o.relative_numbers { p.orange } else { p.gutter });
             }
             let sym = egui::pos2(gutter_rect.min.x + num_w + sym_w / 2.0, cy);
             if self.breakpoints.contains(&line) {
@@ -576,8 +634,213 @@ impl Doc {
             if item(ui, "Dupliquer la ligne", "", true) { self.pending_duplicate = true; ui.close(); }
         });
         if self.pending_edit.is_some() || self.pending_comment || self.pending_duplicate { ui.ctx().request_repaint(); }
+        // ligne de commande Vim (« : », « / ») et messages, en bas de l'éditeur
+        if o.vim {
+            let line = self.vim.cmdline.clone();
+            let msg = self.vim.msg.clone();
+            let show = self.vim.showcmd();
+            if line.is_some() || msg.is_some() || !show.is_empty() {
+                let h = row_h + 8.0;
+                let bar = Rect::from_min_max(egui::pos2(full.min.x, full.max.y - h), full.max);
+                let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, self.id.with("vimbar")))
+                    .with_clip_rect(full);
+                if line.is_some() || msg.is_some() {
+                    painter.rect_filled(bar, 0.0, p.bg_dark);
+                    painter.line_segment([bar.left_top(), bar.right_top()], Stroke::new(1.0, p.bg_hl));
+                }
+                let pos = egui::pos2(bar.min.x + 8.0, bar.center().y);
+                if let Some(l) = &line {
+                    let g = painter.layout_no_wrap(l.clone(), font.clone(), p.fg);
+                    let w = g.size().x;
+                    painter.galley(pos - Vec2::new(0.0, g.size().y / 2.0), g, p.fg);
+                    painter.rect_filled(Rect::from_min_size(egui::pos2(pos.x + w + 1.0, bar.min.y + 4.0), Vec2::new(cw, row_h)), 1.0, p.fg.gamma_multiply(0.7));
+                } else if let Some(m) = &msg {
+                    let col = if m.starts_with('E') { p.red } else { p.fg };
+                    painter.text(pos, egui::Align2::LEFT_CENTER, m, font.clone(), col);
+                }
+                if !show.is_empty() {
+                    painter.text(egui::pos2(bar.max.x - 12.0, bar.center().y), egui::Align2::RIGHT_CENTER, show, font.clone(), p.comment);
+                }
+            }
+        }
         ui.allocate_rect(full, Sense::hover());
         events
+    }
+
+    /// Touches du clavier → Vim. En mode Insertion, l'éditeur écrit lui-même (Vim garde seulement
+    /// la trace pour « . ») ; dans les autres modes, les touches vont à Vim et pas au texte.
+    fn vim_input(&mut self, ui: &mut egui::Ui, te_id: egui::Id, o: &EditorOpts, page: usize, events: &mut EditorEvents) {
+        use crate::vim::{Buf, Mode, Out, K};
+        let ctx = ui.ctx().clone();
+        let mut state = egui::TextEdit::load_state(&ctx, te_id).unwrap_or_default();
+        let n = self.text.chars().count();
+        // clic ou glisser de la souris : le curseur (ou la sélection) vient d'elle
+        let now = state.cursor.char_range();
+        // fichier qui vient d'être ouvert : egui met le curseur à la fin, Vim le veut au début
+        let clicked = ui.input(|i| i.pointer.any_released() || i.pointer.any_down());
+        if self.vim_set.is_none() && !clicked && self.vim.mode != Mode::Insert {
+            let r = CCursorRange::one(CCursor::new(CharIndex(self.vim_cur.min(n))));
+            state.cursor.set_char_range(Some(r));
+            state.clone().store(&ctx, te_id);
+            self.vim_set = Some(r);
+        }
+        if let Some(r) = now.filter(|_| self.vim_set.is_some() || clicked) {
+            if Some(r) != self.vim_set {
+                if self.vim.mode == Mode::Insert {
+                    self.vim_cur = r.primary.index.0;
+                } else if r.is_empty() {
+                    if matches!(self.vim.mode, Mode::Visual | Mode::VisualLine) && self.vim_set.is_some() { self.vim.mode = Mode::Normal; }
+                    self.vim_cur = r.primary.index.0;
+                } else {
+                    // sélection à la souris : mode Visuel
+                    self.vim.mode = Mode::Visual;
+                    self.vim_anchor = r.secondary.index.0;
+                    self.vim_cur = r.primary.index.0.saturating_sub(if r.primary.index.0 > r.secondary.index.0 { 1 } else { 0 });
+                }
+            }
+        }
+        self.vim_cur = self.vim_cur.min(n);
+        // touches
+        let insert = self.vim.mode == Mode::Insert && self.vim.cmdline.is_none();
+        let mut keys: Vec<K> = Vec::new();
+        ctx.input_mut(|i| {
+            let mut keep = Vec::new();
+            for e in std::mem::take(&mut i.events) {
+                let mut eat = false;
+                match &e {
+                    egui::Event::Key { key, pressed: true, modifiers: m, .. } => {
+                        let ctrl = m.ctrl || m.command;
+                        let k = vim_key(*key, ctrl, m.alt, m.shift);
+                        if insert {
+                            match k {
+                                Some(K::Esc) => { keys.push(K::Esc); eat = true; }
+                                Some(K::Enter) if !ctrl && !m.alt => self.vim.record_insert(K::Enter),
+                                Some(K::Back) if !ctrl && !m.alt => self.vim.record_insert(K::Back),
+                                Some(K::Tab) if !ctrl && !m.alt && !m.shift => self.vim.record_insert(K::Tab),
+                                Some(K::Del) if !ctrl && !m.alt => self.vim.record_insert(K::Del),
+                                Some(K::Alt(c)) => { keys.push(K::Esc); keys.push(K::Alt(c)); keys.push(K::Ch('a')); eat = true; }
+                                _ => {}
+                            }
+                        } else if let Some(k) = k {
+                            keys.push(k);
+                            eat = true;
+                        } else if !ctrl {
+                            // lettres, chiffres, signes : le texte arrive par l'événement Text
+                            eat = true;
+                        }
+                    }
+                    egui::Event::Key { .. } => { eat = !insert; }
+                    egui::Event::Text(t) => {
+                        if insert {
+                            for c in t.chars() { self.vim.record_insert(K::Ch(c)); }
+                        } else {
+                            keys.extend(t.chars().map(K::Ch));
+                            eat = true;
+                        }
+                    }
+                    egui::Event::Paste(_) | egui::Event::Cut if !insert => eat = true,
+                    _ => {}
+                }
+                if !eat { keep.push(e); }
+            }
+            i.events = keep;
+        });
+        if keys.is_empty() {
+            self.vim_set = state.cursor.char_range();
+            return;
+        }
+        let (lc, bo, bc) = self.lang.comments();
+        let mut b = Buf::new(&self.text, self.vim_cur);
+        b.anchor = self.vim_anchor.min(n);
+        b.page = page;
+        b.indent = o.indent_text();
+        b.comment = (lc.to_string(), bo.to_string(), bc.to_string());
+        if keys.iter().any(|k| matches!(k, K::Ch('p') | K::Ch('P'))) { b.clip = crate::clip::get(); }
+        let before = (state.cursor.char_range().unwrap_or(CCursorRange::one(CCursor::new(CharIndex(self.vim_cur)))), self.text.clone());
+        let mut outs = Vec::new();
+        let mut rest = keys.into_iter();
+        for k in rest.by_ref() {
+            self.vim.msg = None;
+            let o2 = self.vim.key(&mut b, k);
+            let leader = o2.iter().any(|x| *x == Out::Leader);
+            outs.extend(o2);
+            if leader { break; }
+        }
+        events.leader_keys.extend(rest);
+        let mut undoer = state.undoer();
+        if b.changed {
+            undoer.add_undo(&before);
+            self.text = b.text();
+            self.cache = None;
+            events.changed = true;
+        }
+        self.vim_cur = b.cur;
+        self.vim_anchor = b.anchor;
+        for out in outs {
+            match out {
+                Out::Undo(k) | Out::Redo(k) => {
+                    let redo = matches!(out, Out::Redo(_));
+                    for _ in 0..k.max(1) {
+                        let cur = (CCursorRange::one(CCursor::new(CharIndex(self.vim_cur))), self.text.clone());
+                        let r = if redo { undoer.redo(&cur).cloned() } else { undoer.undo(&cur).cloned() };
+                        match r {
+                            Some((c, t)) => { self.text = t; self.vim_cur = c.primary.index.0.min(c.secondary.index.0); self.cache = None; events.changed = true; }
+                            None => { self.vim.msg = Some(if redo { "Déjà à la modification la plus récente".into() } else { "Déjà à la modification la plus ancienne".into() }); break; }
+                        }
+                    }
+                }
+                Out::Copy(t) => ctx.copy_text(t),
+                Out::Highlight(q) => self.vim_hl = q,
+                Out::Scroll(c) => self.vim_scroll = Some(c),
+                other => events.vim.push(other),
+            }
+        }
+        // curseur et sélection pour l'éditeur
+        let n = self.text.chars().count();
+        let cur = self.vim_cur.min(n);
+        let a = self.vim_anchor.min(n);
+        let range = match self.vim.mode {
+            Mode::Visual => if cur >= a { CCursorRange::two(CCursor::new(CharIndex(a)), CCursor::new(CharIndex((cur + 1).min(n)))) }
+                            else { CCursorRange::two(CCursor::new(CharIndex((a + 1).min(n))), CCursor::new(CharIndex(cur))) },
+            Mode::VisualLine => {
+                let (lo, hi) = (a.min(cur), a.max(cur));
+                let chars: Vec<char> = self.text.chars().collect();
+                let ls = chars[..lo].iter().rposition(|c| *c == '\n').map(|p| p + 1).unwrap_or(0);
+                let le = chars[hi.min(n)..].iter().position(|c| *c == '\n').map(|p| p + hi + 1).unwrap_or(n);
+                if cur >= a { CCursorRange::two(CCursor::new(CharIndex(ls)), CCursor::new(CharIndex(le))) }
+                else { CCursorRange::two(CCursor::new(CharIndex(le)), CCursor::new(CharIndex(ls))) }
+            }
+            _ => CCursorRange::one(CCursor::new(CharIndex(cur))),
+        };
+        state.set_undoer(undoer);
+        state.cursor.set_char_range(Some(range));
+        state.store(&ctx, te_id);
+        self.vim_set = Some(range);
+        if self.vim_scroll.is_none() { self.vim_scroll = Some('m'); }
+    }
+
+    /// Mot sous le curseur (␣sw).
+    pub fn word_at_cursor(&self) -> Option<String> {
+        let chars: Vec<char> = self.text.chars().collect();
+        let mut s = self.vim_cur.min(chars.len());
+        let w = |c: char| c.is_alphanumeric() || c == '_';
+        if s >= chars.len() || !w(chars[s]) { return None; }
+        while s > 0 && w(chars[s - 1]) { s -= 1; }
+        let mut e = s;
+        while e < chars.len() && w(chars[e]) { e += 1; }
+        Some(chars[s..e].iter().collect())
+    }
+
+    /// Remplace tout le texte (:e!) en gardant l'annulation possible.
+    pub fn replace_all(&mut self, text: &str, ctx: &egui::Context) {
+        let id = self.id.with("te");
+        let mut st = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+        let mut u = st.undoer();
+        u.add_undo(&(CCursorRange::one(CCursor::new(CharIndex(self.vim_cur))), self.text.clone()));
+        st.set_undoer(u);
+        st.store(ctx, id);
+        self.text = text.to_string();
+        self.cache = None;
     }
 
     /// Texte sélectionné (sur une seule ligne), pour pré-remplir la recherche.
@@ -838,16 +1101,21 @@ pub struct EditorOpts {
     pub word_wrap: bool,
     pub auto_indent: bool,
     pub close_brackets: bool,
+    /// mode Vim
+    pub vim: bool,
+    /// numéros de ligne relatifs (comme LazyVim)
+    pub relative_numbers: bool,
 }
 
 impl Default for EditorOpts {
     fn default() -> Self {
         EditorOpts { tab_width: 4, use_spaces: true, line_numbers: true, indent_guides: true, caret_line: true,
-                     bracket_match: true, folding: true, word_wrap: false, auto_indent: true, close_brackets: false }
+                     bracket_match: true, folding: true, word_wrap: false, auto_indent: true, close_brackets: false, vim: false, relative_numbers: false }
     }
 }
 
 impl EditorOpts {
+    pub fn indent_text(&self) -> String { self.indent() }
     /// Ce qu'insère la touche Tab (espaces ou tabulation).
     fn indent(&self) -> String {
         if self.use_spaces { " ".repeat(self.tab_width.max(1)) } else { "\t".into() }
@@ -856,6 +1124,9 @@ impl EditorOpts {
 
 #[derive(Default)]
 pub struct EditorEvents {
+    /// ce que Vim demande à l'application (leader, :w, changer d'onglet…) et touches tapées après Espace
+    pub vim: Vec<crate::vim::Out>,
+    pub leader_keys: Vec<crate::vim::K>,
     pub changed: bool,
     pub breakpoint: Option<usize>,
     pub found: bool,
@@ -1044,4 +1315,37 @@ mod tests {
         d.trim_trailing();
         assert_eq!(d.text, "a\nb\n  c");
     }
+}
+
+/// Touche spéciale (ou avec Ctrl / Alt) → touche Vim. Les lettres simples arrivent par l'événement Text.
+fn vim_key(key: Key, ctrl: bool, alt: bool, shift: bool) -> Option<crate::vim::K> {
+    use crate::vim::K;
+    let letter = |k: Key| -> Option<char> {
+        let n = k.name();
+        let c = n.chars().next()?;
+        if n.chars().count() == 1 && c.is_ascii_alphabetic() { Some(c.to_ascii_lowercase()) } else { None }
+    };
+    if ctrl && !alt {
+        if key == Key::Slash || key == Key::Colon && shift { return Some(K::Ctrl('/')); }
+        if key == Key::OpenBracket { return Some(K::Esc); }
+        return match letter(key) { Some(c @ ('r' | 'd' | 'u' | 'h' | 'j' | 'k' | 'l')) if !shift => Some(K::Ctrl(c)), _ => None };
+    }
+    if alt && !ctrl {
+        return match letter(key) { Some(c @ ('j' | 'k')) => Some(K::Alt(c)), _ => None };
+    }
+    if ctrl || alt { return None; }
+    Some(match key {
+        Key::Escape => K::Esc,
+        Key::Enter => K::Enter,
+        Key::Backspace => K::Back,
+        Key::Tab => K::Tab,
+        Key::Delete => K::Del,
+        Key::ArrowUp => K::Up,
+        Key::ArrowDown => K::Down,
+        Key::ArrowLeft => K::Left,
+        Key::ArrowRight => K::Right,
+        Key::Home => K::Home,
+        Key::End => K::End,
+        _ => return None,
+    })
 }

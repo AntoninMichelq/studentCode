@@ -1550,7 +1550,7 @@ class MainWindow(QMainWindow):
     def __init__(self, args):
         super().__init__()
         self.settings = QSettings("StudentCode", "StudentCode")
-        self.vim_on = self.settings.value("vim", False, type=bool)
+        self.vim_on = self.settings.value("vim", True, type=bool)
         self.vim_linewise = False
         self.scrollbars = self.settings.value("scrollbars", False, type=bool)  # masquées par défaut
         self.rrun = None  # connexion SSH sur laquelle un programme tourne, sinon None

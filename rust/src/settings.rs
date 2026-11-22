@@ -38,6 +38,10 @@ pub struct Settings {
     pub word_wrap: bool,
     pub auto_indent: bool,
     pub close_brackets: bool,
+    /// mode Vim (activé par défaut, comme LazyVim)
+    pub vim_mode: bool,
+    /// numéros de ligne relatifs en mode Vim
+    pub relative_numbers: bool,
     /// 0 : jamais ; 1 : en changeant d'onglet ; 2 : une seconde après la dernière frappe
     pub autosave: u8,
     pub trim_on_save: bool,
@@ -62,6 +66,7 @@ impl Settings {
             tab_width: self.tab_width.clamp(1, 16), use_spaces: self.use_spaces, line_numbers: self.line_numbers,
             indent_guides: self.indent_guides, caret_line: self.caret_line, bracket_match: self.bracket_match,
             folding: self.folding, word_wrap: self.word_wrap, auto_indent: self.auto_indent, close_brackets: self.close_brackets,
+            vim: self.vim_mode, relative_numbers: self.vim_mode && self.relative_numbers,
         }
     }
 }
@@ -90,6 +95,8 @@ impl Default for Settings {
             word_wrap: false,
             auto_indent: true,
             close_brackets: false,
+            vim_mode: true,
+            relative_numbers: true,
             autosave: 0,
             trim_on_save: false,
             shell: String::new(),
@@ -209,7 +216,7 @@ pub enum Action {
     Find, FindNext, FindPrev, Replace, Goto, Comment, DuplicateLine, DeleteLine, MoveLineUp, MoveLineDown,
     Run, Debug, Stop, StepOver, StepInto, StepOut, Breakpoint,
     ToggleSide, ToggleBottom, Terminal, NewTerminal, SplitRight, NextTab, PrevTab,
-    ZoomIn, ZoomOut, ZoomReset, Libs, Ssh, Vpn, Settings, Menu,
+    ZoomIn, ZoomOut, ZoomReset, Libs, Ssh, Vpn, Settings, ToggleVim, Menu,
 }
 
 pub const ACTIONS: &[Action] = &[
@@ -218,7 +225,7 @@ pub const ACTIONS: &[Action] = &[
     Action::DeleteLine, Action::MoveLineUp, Action::MoveLineDown,
     Action::Run, Action::Debug, Action::Stop, Action::StepOver, Action::StepInto, Action::StepOut, Action::Breakpoint,
     Action::ToggleSide, Action::ToggleBottom, Action::Terminal, Action::NewTerminal, Action::SplitRight, Action::NextTab, Action::PrevTab,
-    Action::ZoomIn, Action::ZoomOut, Action::ZoomReset, Action::Libs, Action::Ssh, Action::Vpn, Action::Settings, Action::Menu,
+    Action::ZoomIn, Action::ZoomOut, Action::ZoomReset, Action::Libs, Action::Ssh, Action::Vpn, Action::Settings, Action::ToggleVim, Action::Menu,
 ];
 
 impl Action {
@@ -234,7 +241,7 @@ impl Action {
             ToggleSide => "toggle_side", ToggleBottom => "toggle_bottom", Terminal => "terminal",
             NewTerminal => "new_terminal", SplitRight => "split_right", NextTab => "next_tab", PrevTab => "prev_tab",
             ZoomIn => "zoom_in", ZoomOut => "zoom_out", ZoomReset => "zoom_reset", Libs => "libs", Ssh => "ssh",
-            Vpn => "vpn", Settings => "settings", Menu => "menu",
+            Vpn => "vpn", Settings => "settings", ToggleVim => "toggle_vim", Menu => "menu",
         }
     }
 
@@ -258,7 +265,7 @@ impl Action {
             NewTerminal => "Nouveau terminal", SplitRight => "Scinder à droite", NextTab => "Onglet suivant",
             PrevTab => "Onglet précédent", ZoomIn => "Agrandir le texte", ZoomOut => "Réduire le texte",
             ZoomReset => "Taille du texte par défaut", Libs => "Bibliothèques Python", Ssh => "Connexion SSH", Vpn => "VPN",
-            Settings => "Paramètres", Menu => "Menu",
+            Settings => "Paramètres", ToggleVim => "Mode Vim (activer / désactiver)", Menu => "Menu",
         }
     }
 
@@ -274,7 +281,7 @@ impl Action {
             StepOver => "F10", StepInto => "F11", StepOut => "Maj+F11", Breakpoint => "F9", ToggleSide => "Ctrl+B",
             ToggleBottom => "Ctrl+J ou Ctrl+`", Terminal => "Alt+T", NewTerminal => "Ctrl+Maj+`", SplitRight => "Ctrl+\\",
             NextTab => "Ctrl+Tab", PrevTab => "Ctrl+Maj+Tab", ZoomIn => "Ctrl+= ou Ctrl++", ZoomOut => "Ctrl+-", ZoomReset => "Ctrl+0",
-            Libs => "Ctrl+Maj+L", Ssh => "Ctrl+Alt+S", Vpn => "", Settings => "Ctrl+,", Menu => "Alt+M",
+            Libs => "Ctrl+Maj+L", Ssh => "Ctrl+Alt+S", Vpn => "", Settings => "Ctrl+,", ToggleVim => "Ctrl+Alt+V", Menu => "Alt+M",
         }
     }
 

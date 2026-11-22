@@ -178,6 +178,7 @@ impl App {
             let find_text = self.find_text.clone();
             let can_bp = self.module.is_some();
             let eopts = self.cfg.editor_opts();
+            let mut vim_out: (Vec<crate::vim::Out>, Vec<crate::vim::K>) = (Vec::new(), Vec::new());
             match &mut self.tabs[i].c {
                 Content::Doc(d) => {
                     let path = d.path.clone();
@@ -186,7 +187,8 @@ impl App {
                     };
                     d.find = if find_open { Some(find_text) } else { None };
                     let bp_ok = can_bp && d.lang == crate::highlight::Lang::Python && d.remote.is_none();
-                    let ev = d.ui(&mut body_ui, &p, &font, line_of(&dbg), line_of(&err), bp_ok, &eopts);
+                    let mut ev = d.ui(&mut body_ui, &p, &font, line_of(&dbg), line_of(&err), bp_ok, &eopts);
+                    vim_out = (std::mem::take(&mut ev.vim), std::mem::take(&mut ev.leader_keys));
                     if ev.changed { self.error_line = None; self.last_edit = Some(std::time::Instant::now()); }
                     if let Some(line) = ev.breakpoint { self.sync_breakpoint(i, line); }
                     if find_open {
@@ -196,6 +198,8 @@ impl App {
                 Content::Pdf(v) => v.ui(&mut body_ui, &p),
                 Content::Image(v) => v.ui(&mut body_ui, &p),
             }
+            // appliqué après le dessin des volets (:vs, ␣- … changent leur disposition)
+            if !vim_out.0.is_empty() { self.vim_queue.push(vim_out); }
         }
         // ---- onglet glissé dans une barre d'onglets : il prend sa place parmi les autres
         if let Some(uid) = self.drag_tab {

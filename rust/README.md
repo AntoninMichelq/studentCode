@@ -24,6 +24,13 @@ Les mots de passe retenus vont dans le trousseau du bureau si `secret-tool` est 
 (`sudo apt install libsecret-tools`), sinon dans un fichier lisible par toi seul.
 Si la version Python est installée, elle reste disponible sous le nom `studentcode-py`.
 
+## Mode Vim (comme LazyVim)
+
+Activé par défaut. **Échap** : mode Normal, **i** : écrire, **v / V** : sélectionner, **:w**
+enregistrer, **:q** fermer. **Espace** ouvre la liste des raccourcis de LazyVim (fichiers ␣␣,
+recherche dans le projet ␣/, onglets ␣,, débogage ␣d…, Harpoon ␣1–␣9…) ; ␣sk les montre tous.
+Pour le couper : Paramètres → Éditeur, menu Affichage ou Ctrl+Alt+V.
+
 ## Personnaliser
 
 **Paramètres** (Ctrl+, ou menu ☰ → Affichage → Paramètres…) :

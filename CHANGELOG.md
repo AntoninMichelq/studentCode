@@ -3,7 +3,8 @@
 ## 1.1.6
 
 - **StudentCode s'appelle maintenant SCode** (titre de la fenêtre, menus, raccourcis, installateur). Les réglages, labs et sessions sont gardés.
-- Nouvelle icône : un « S » vide (juste son contour) sur une tuile blanche.
+- Mode Vim activé par défaut (Ctrl+Alt+V pour le couper).
+- Nouvelle icône : un « S » vide (juste son contour) avec le curseur « _ » d’un terminal, sur une tuile papier encadrée.
 
 ## 1.1.5
 

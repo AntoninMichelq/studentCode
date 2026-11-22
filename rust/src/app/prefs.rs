@@ -165,6 +165,10 @@ impl App {
     fn page_editor(&mut self, ui: &mut egui::Ui) {
         let p = self.p;
         let c = &mut self.cfg;
+        heading(ui, &p, "Mode Vim");
+        ui.checkbox(&mut c.vim_mode, "Mode Vim, avec les raccourcis de LazyVim (Espace = touche leader)");
+        ui.add_enabled(c.vim_mode, egui::Checkbox::new(&mut c.relative_numbers, "Numéros de ligne relatifs"));
+        ui.label(RichText::new("Échap : mode Normal · i : écrire · v / V : sélection · : commandes (:w, :q…) · Espace : menu des raccourcis (comme which-key)").color(p.comment).small());
         heading(ui, &p, "Indentation");
         ui.horizontal(|ui| {
             ui.label("Largeur d'une tabulation");
