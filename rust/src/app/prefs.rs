@@ -1,10 +1,10 @@
 //! Fenêtre « Paramètres » (Ctrl+,) : apparence, disposition, éditeur, terminal et exécution,
-//! raccourcis clavier. Tout s'applique tout de suite et est enregistré dans settings.json.
+//! statut Discord, raccourcis clavier. Tout s'applique tout de suite et est enregistré dans settings.json.
 use super::*;
 use crate::settings::{self, Action, Settings, Shortcut};
 use egui::{Rect, RichText, Sense};
 
-const PAGES: &[&str] = &["Apparence", "Disposition", "Éditeur", "Terminal et exécution", "Raccourcis clavier"];
+const PAGES: &[&str] = &["Apparence", "Disposition", "Éditeur", "Terminal et exécution", "Discord", "Raccourcis clavier"];
 
 impl App {
     pub(super) fn settings_window(&mut self, ctx: &egui::Context) {
@@ -55,6 +55,7 @@ impl App {
                                 1 => self.page_layout(ui),
                                 2 => self.page_editor(ui),
                                 3 => self.page_terminal(ui),
+                                4 => self.page_discord(ui),
                                 _ => self.page_keys(ui, ctx),
                             }
                         });
@@ -239,6 +240,22 @@ impl App {
         ui.label(RichText::new("Ex. un environnement virtuel : ~/projet/.venv/bin/python").color(p.comment).small());
         ui.checkbox(&mut c.save_before_run, "Enregistrer aussi les autres fichiers modifiés avant d'exécuter");
         ui.checkbox(&mut c.clear_output, "Effacer la Sortie à chaque exécution");
+    }
+
+    fn page_discord(&mut self, ui: &mut egui::Ui) {
+        let p = self.p;
+        let c = &mut self.cfg;
+        heading(ui, &p, "Statut d'activité Discord");
+        ui.checkbox(&mut c.discord_rpc, "Montrer dans Discord que je suis sur SCode (statut d'activité)");
+        ui.add_enabled_ui(c.discord_rpc, |ui| {
+            ui.checkbox(&mut c.discord_show_file, "Montrer aussi le nom du fichier et du dossier");
+            ui.horizontal(|ui| {
+                ui.label("Identifiant de l'application Discord");
+                ui.add(egui::TextEdit::singleline(&mut c.discord_app_id).desired_width(200.0)
+                    .hint_text(if crate::discord::DEFAULT_APP_ID.is_empty() { "à renseigner" } else { crate::discord::DEFAULT_APP_ID }));
+            });
+        });
+        ui.label(RichText::new("Discord doit être ouvert sur cet ordinateur ; le statut s'affiche quelques secondes après.").color(p.comment).small());
     }
 
     fn page_keys(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
