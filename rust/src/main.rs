@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod app;
+mod discord;
 mod editor;
 mod explorer;
 mod fileicons_gen;

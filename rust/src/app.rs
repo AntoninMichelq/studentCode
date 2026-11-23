@@ -311,6 +311,8 @@ pub struct App {
     autosave_focus: bool,
     /// réglages modifiés, à enregistrer
     pub(crate) cfg_dirty: bool,
+    /// statut d'activité Discord
+    discord: crate::discord::Presence,
     /// dernière frappe (enregistrement automatique)
     last_edit: Option<std::time::Instant>,
     /// champ « Évaluer une expression » du débogueur
@@ -404,7 +406,7 @@ impl App {
             find_text: String::new(), replace_text: String::new(), find_info: String::new(), dialog: None,
             status: None, recent: sess.recent.clone(), run_args: sess.run_args.clone(), allow_quit: false,
             title: String::new(), new_count: 0, ctx: cc.egui_ctx.clone(), logo: None,
-            labs: ssh::load_labs(), sessions: Vec::new(), ssh_sel: 0, ssh_new: false, cfg, settings_open: false, settings_page: 0, key_capture: None, menu_request: false, leader: None, leader_pending: Vec::new(), picker: None, harpoon: BTreeMap::new(), recent_files: Vec::new(), zen: None, prev_tab: None, focus_terminal: false, vim_queue: Vec::new(), pending_end: None, bp_store: BTreeMap::new(), autosave_tab: None, autosave_focus: true, cfg_dirty: false, last_edit: None, dbg_eval: String::new(), ssh_hidden: false, start_url: String::new(), libs_open: false, quick: String::new(), diag: None,
+            labs: ssh::load_labs(), sessions: Vec::new(), ssh_sel: 0, ssh_new: false, cfg, settings_open: false, settings_page: 0, key_capture: None, menu_request: false, leader: None, leader_pending: Vec::new(), picker: None, harpoon: BTreeMap::new(), recent_files: Vec::new(), zen: None, prev_tab: None, focus_terminal: false, vim_queue: Vec::new(), pending_end: None, bp_store: BTreeMap::new(), autosave_tab: None, autosave_focus: true, cfg_dirty: false, discord: crate::discord::Presence::start(), last_edit: None, dbg_eval: String::new(), ssh_hidden: false, start_url: String::new(), libs_open: false, quick: String::new(), diag: None,
             vpns: Vec::new(), vpn_sel: None, vpn_list: None, vpn_job: None, vpn_status: String::new(),
             vpn_creds: HashMap::new(), vpn_refreshed: None,
             bookmarks: if sess.bookmarks.is_empty() { default_bookmarks() } else { sess.bookmarks.clone() },
@@ -1654,6 +1656,38 @@ impl App {
     }
 }
 
+impl App {
+    /// Statut Discord : fichier affiché, langage, dossier ouvert (envoyé seulement s'il change).
+    fn update_discord(&mut self) {
+        if !self.cfg.discord_rpc {
+            self.discord.set(None);
+            return;
+        }
+        let app_id = if self.cfg.discord_app_id.trim().is_empty() { crate::discord::DEFAULT_APP_ID.to_string() } else { self.cfg.discord_app_id.trim().to_string() };
+        let show = self.cfg.discord_show_file;
+        let folder = self.root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let (details, state) = match self.cur().map(|i| &self.tabs[i]) {
+            None => ("Page d'accueil".to_string(), "Prêt à coder".to_string()),
+            Some(t) => {
+                let name = t.title();
+                let (verb, lang) = match &t.c {
+                    Content::Doc(d) => ("Modifie", Some(d.lang.name())),
+                    Content::Pdf(_) => ("Lit", Some("PDF")),
+                    Content::Image(_) => ("Regarde", Some("Image")),
+                };
+                let remote = t.doc().map(|d| d.remote.is_some()).unwrap_or(false);
+                let lang = lang.unwrap_or("Texte");
+                let details = if show { format!("{verb} {name}") } else if matches!(t.c, Content::Doc(_)) { format!("Modifie un fichier {lang}") } else { format!("{verb} un fichier") };
+                let mut state = lang.to_string();
+                if self.debugging() { state.push_str(" · débogage"); } else if self.run.is_some() { state.push_str(" · exécution"); }
+                if remote { state.push_str(" · via SSH"); } else if show && !folder.is_empty() { state.push_str(&format!(" · dossier {folder}")); }
+                (details, state)
+            }
+        };
+        self.discord.set(Some(crate::discord::Activity { app_id, details, state }));
+    }
+}
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -1682,6 +1716,7 @@ impl eframe::App for App {
             self.title = title.clone();
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
         }
+        self.update_discord();
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_quit {
             self.save_session();
             if self.tabs.iter().any(|t| t.dirty()) {

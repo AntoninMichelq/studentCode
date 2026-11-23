@@ -58,6 +58,13 @@ pub struct Settings {
     pub python: String,
     pub clear_output: bool,
     pub save_before_run: bool,
+    // --- Discord
+    /// montrer dans Discord qu'on est sur SCode (statut d'activité)
+    pub discord_rpc: bool,
+    /// montrer aussi le nom du fichier et du dossier (sinon seulement le langage)
+    pub discord_show_file: bool,
+    /// identifiant de l'application Discord (vide = celui de SCode)
+    pub discord_app_id: String,
     // --- raccourcis : action → touches (« Ctrl+Maj+S »), vide = aucun
     pub keys: BTreeMap<String, String>,
 }
@@ -108,6 +115,9 @@ impl Default for Settings {
             python: String::new(),
             clear_output: true,
             save_before_run: true,
+            discord_rpc: true,
+            discord_show_file: true,
+            discord_app_id: String::new(),
             keys: BTreeMap::new(),
         }
     }

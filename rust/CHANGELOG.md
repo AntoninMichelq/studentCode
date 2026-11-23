@@ -1,5 +1,12 @@
 # StudentCode en Rust — journal des versions
 
+## Prochaine version
+
+- **Statut d'activité Discord** (comme les extensions de VS Code) : si Discord est ouvert, il montre
+  automatiquement « SCode », le fichier modifié, son langage, le dossier et le temps écoulé.
+  Réglable dans Paramètres → Discord (désactiver, ou cacher le nom du fichier et du dossier).
+  Rien ne se passe si Discord n'est pas lancé ; SCode se reconnecte tout seul quand il l'est.
+
 ## 2.1.1
 
 - **Nouveau fichier** (Ctrl+N, bouton, menu, ␣fn) ne crée plus un .py d'office : une liste
